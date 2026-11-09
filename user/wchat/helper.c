@@ -13,11 +13,14 @@ and what the server sends goes to the window in LINK_DATA frames. It parses none
 does, and reads the helper's frames as hostile.
 
 The transport waits inside its calls, and a read with nothing to read for 15 seconds fails, which a
-quiet IRC connection cannot afford. So the helper reads only when poll() says the connection's
-descriptor (ut_transport_fd()) is ready, and with room for a whole TLS record (16 KB), so that
-nothing is left inside TLS where poll() cannot see it; a record that comes in pieces is waited for
-within the transport's 15 seconds. Its deadline is 20 days (ut_now()'s differences hold 24): a
-connection that lasts longer ends, and says so.
+quiet IRC connection cannot afford. So the helper waits in poll() on the window's pipe and the
+connection's descriptor (ut_transport_fd()), relays the window's lines first (a server may send
+nothing until the first ones come), and reads the connection with ut_transport_read_now(), which
+never waits (11/09/26, the review): a record with no data in it, such as the session tickets a TLS 1.3
+server sends after its handshake, or part of a record, gives nothing, and the helper waits in poll()
+again. It reads with room for a whole TLS record (16 KB), so that nothing is left inside TLS where
+poll() cannot see it. Its deadline is 20 days (ut_now()'s differences hold 24): a connection that
+lasts longer ends, and says so.
 
 It ends when the window's pipe ends (the window closed it, or has gone): TLS's close_notify goes
 when the connection is still good. A password passes through it inside the line that carries it,
@@ -122,8 +125,15 @@ int helper_main(int argc, char **argv) {
             status = down("waiting for the server failed");
             break;
         }
-        if(p[1].revents) {
-            n = ut_transport_read(t, rec, sizeof(rec));
+        if(p[0].revents) {                          /* the window's lines first: a server may wait for them */
+            n = (int)read(0, lines, sizeof(lines));
+            if(n < 0 && errno == EINTR) continue;
+            if(n <= 0) break;                       /* the window ended the connection */
+            if((status = relay(t, n)) != 0) break;
+        }
+        if(p[1].revents) {                          /* never waits: a record with no data (a ticket) gives nothing */
+            n = ut_transport_read_now(t, rec, sizeof(rec));
+            if(n == UT_TRANSPORT_AGAIN) continue;
             if(n == 0) {
                 status = down("the server closed the connection");
                 break;
@@ -134,12 +144,6 @@ int helper_main(int argc, char **argv) {
                 break;
             }
             if(put(LINK_DATA, rec, n)) break;       /* the window has gone */
-        }
-        if(p[0].revents) {
-            n = (int)read(0, lines, sizeof(lines));
-            if(n < 0 && errno == EINTR) continue;
-            if(n <= 0) break;                       /* the window ended the connection */
-            if((status = relay(t, n)) != 0) break;
         }
     }
     ut_transport_close(t);
