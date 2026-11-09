@@ -232,7 +232,7 @@ def tidy(d, state):
     Terminal closed"""
     g = state.get('open')
     if g is not None and g.at is not None:
-        for _ in range(2):
+        for _ in range(3):      # 11/09/26 (the integration): the desktop asks "End the program?" at the third press
             if g.gone(d.vm.screen()):
                 break
             g.close_button()
