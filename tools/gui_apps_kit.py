@@ -12,7 +12,8 @@ window; Esc cancels either. The Lists tab shows the list with its columns: a cli
 wheel scrolls it. The Drawing tab shows the area the program draws, with its scroll bars: a click marks a cell, and the
 wheel scrolls it by rows. The corner grip makes the window smaller, and the layout follows (the status bar at the new
 bottom, the size in it). Its close button asks first, and Close ends it: ps finds no wkit. The checks leave the
-desktop as they found it (wkit ended, the Terminal closed), also when one fails."""
+desktop as they found it (a dialog left open closed, wkit ended, the Terminal closed), also when one fails. The
+desktop's chooser is known by its own title after whom it is for, as desk's implementation writes its bar."""
 import os
 import re
 
@@ -20,6 +21,7 @@ import gui_apps_term as term
 from gui_apps_scenario import PAPER, INK, TEAL, MUTED, BAND
 CORAL = bytes.fromhex('ee906d')
 from gui_apps_win import answered
+from gui_apps_media import dialog_open
 
 W, H = 600, 360                     # wkit's content (user/wkit/demo.h)
 TITLE_H, FRAME_W, FRAME_H = 28, 2, 29
@@ -27,9 +29,16 @@ SHEET = bytes.fromhex('fffdf5')
 SHELL = bytes.fromhex('dee3d8')
 LINE = bytes.fromhex('c9cfc4')
 PARK = (900, 480)                   # the pointer clear of the windows and of the Terminal's text
+CHOOSER = (220, 81)                 # the desktop's chooser's top left at 960x540 (shell/guidialog.c's layout)
 EDIT_X, PASTE_Y = 160, 149          # the Edit menu's title, and its Paste item's middle (gui_apps_win.py's)
 STATUS_Y = H - 22                   # the status bar, in the content
 TABS = {'Controls': 8, 'Lists': 8 + 78 + 4, 'Drawing': 8 + 78 + 4 + 54 + 4, 'More': 8 + 78 + 4 + 54 + 4 + 70 + 4}   # each tab's left in the strip
+
+
+def chooser_titled(d, own):
+    """a predicate: the desktop's chooser is up (at 960x540), its title bar ending in its own title after the name of
+    whom it is for ("Toolkit: Open a file" with desk's 2c5afd30, the program's name after its fix round)"""
+    return lambda s: any(d.text(s, CHOOSER[0] + 28 + 8 * k, CHOOSER[1] + 6, ': ' + own, PAPER, TEAL) for k in range(1, 30))
 
 
 def places(h=H):
@@ -134,8 +143,8 @@ def checks(d):
         # a chooser by File > Open's shortcut: the desktop's (220, 81 at 960x540, as the launcher's), or the line the
         # toolkit opens over the window instead
         d.key('ctrl-o')
-        d.visible('kit: Ctrl+O, a menu\'s shortcut, asks for a chooser: the desktop\'s, or a line to type the path in',
-                  lambda s: d.text(s, 220 + 28, 81 + 6, 'Open a file', PAPER, TEAL) or
+        d.visible('kit: Ctrl+O, a menu\'s shortcut, asks for a chooser: the desktop\'s (its own title after whom it is '
+                  'for), or a line to type the path in', lambda s: chooser_titled(d, 'Open a file')(s) or
                   w.text(s, bx + 28, (H - 160) // 2 + 6, 'Open a file', PAPER, TEAL), 'guiapps-kit-chooser.png')
         d.key('esc')
         d.visible('kit: Esc cancels it', w.status('Not chosen'))
@@ -227,7 +236,13 @@ def checks(d):
 
 
 def tidy(d, state):
-    """wkit ended (its close button and Close, or End when it does not answer), then the Terminal closed"""
+    """a desktop dialog left open closed (a chooser, whatever happened), wkit ended (its close button and Close, or End
+    when it does not answer), then the Terminal closed"""
+    for _ in range(3):
+        if not dialog_open(d, d.vm.screen()):
+            break
+        d.key('esc')
+        d.vm.pump(0.5)
     if state.get('open'):
         s = d.vm.screen()
         at = find(d, s)
