@@ -1323,6 +1323,29 @@ static void held(void) {
     gk_close(ui);
 }
 
+/* the review (F6): Ctrl+[ \ ] ^ and / (or _), which the desktop sends as 27 to 31 with WIN_MOD_CTRL, are the shortcuts
+   they are written as, and say so in the bar */
+static void punct(void) {
+    struct gk *ui = window("Punct", 300, 200);
+    int m = gk_menu(ui, "Edit");
+    static const struct { unsigned key; const char *keys; } want[] = {
+        { 27, "Ctrl+[" }, { 29, "Ctrl+]" }, { 28, "Ctrl+\\" }, { 30, "Ctrl+^" }, { 31, "Ctrl+/" } };
+    int i;
+    CHECK(gk_menu_item(ui, m, 1, "Outdent", GK_CTRL | '[', 0) == 0 && gk_menu_item(ui, m, 2, "Indent", GK_CTRL | ']', 0) == 0 &&
+          gk_menu_item(ui, m, 3, "Back", GK_CTRL | '\\', 0) == 0 && gk_menu_item(ui, m, 4, "Top", GK_CTRL | '^', 0) == 0 &&
+          gk_menu_item(ui, m, 5, "Comment", GK_CTRL | '/', 0) == 0);
+    run(ui);
+    for(i = 0; i < 5; i++) CHECK(!strcmp(gkf_menu_entry(1 + i)->keys, want[i].keys));
+    for(i = 0; i < 5; i++) gkf_key(want[i].key, WIN_MOD_CTRL);
+    gkf_key(31, WIN_MOD_CTRL | WIN_MOD_SHIFT);          /* Ctrl+_ with Shift, as a keyboard types it: Comment too */
+    gkf_key(27, 0);                                     /* Esc is no shortcut of these */
+    run(ui);
+    CHECK(count(GK_EV_MENU) == 6 && nth(GK_EV_MENU, 0)->id == 1 && nth(GK_EV_MENU, 1)->id == 2 &&
+          nth(GK_EV_MENU, 2)->id == 3 && nth(GK_EV_MENU, 3)->id == 4 && nth(GK_EV_MENU, 4)->id == 5 &&
+          nth(GK_EV_MENU, 5)->id == 5 && count(GK_EV_KEY) == 1);
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -1813,6 +1836,7 @@ int main(void) {
     repeats();
     cuts();
     held();
+    punct();
     paste();
     choosers();
     theme();

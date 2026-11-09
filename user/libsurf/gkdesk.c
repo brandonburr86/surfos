@@ -189,7 +189,12 @@ static unsigned shortcut_of(unsigned key, unsigned mods) {
     if(key >= 1 && key <= 26 && ((mods & WIN_MOD_CTRL) || (key != 8 && key != 9 && key != 10 && key != 13))) {
         key = 'A' + key - 1;
         mods |= WIN_MOD_CTRL;
-    } else if(key >= 'a' && key <= 'z') key = key - 'a' + 'A';
+        return mods << 16 | key;
+    }
+    if((mods & WIN_MOD_CTRL) && key >= 27 && key <= 31)    /* (the review, F6) Ctrl+[ \ ] ^ _ come as 27 to 31 */
+        key = (unsigned char)"[\\]^_"[key - 27];
+    if((mods & WIN_MOD_CTRL) && key == '/') key = '_';      /* and Ctrl+/ as Ctrl+_, 31 */
+    if(key >= 'a' && key <= 'z') key = key - 'a' + 'A';
     else if(key > ' ' && key < 127 && !(key >= 'A' && key <= 'Z')) mods &= ~(unsigned)WIN_MOD_SHIFT;
     return mods << 16 | key;
 }
@@ -197,8 +202,11 @@ static unsigned shortcut_of(unsigned key, unsigned mods) {
 static int add(struct gk_menus *m, int menu, unsigned id, unsigned flags, const char *label, unsigned shortcut,
                unsigned own, int sub) {
     struct gk_menu_entry *e;
+    unsigned shown = shortcut;                          /* its text as written: Ctrl+/ stays Ctrl+/ */
     if(m->n == WIN_MENU_ENTRIES) return -1;
     if(shortcut) shortcut = shortcut_of(shortcut & 0xFFFF, shortcut >> 16);
+    if(shortcut && (shortcut & 0xFFFF) != '_') shown = shortcut;
+    else if(shortcut) shown = (shortcut & ~0xFFFFu) | ((shown & 0xFFFF) == '/' ? '/' : '_');
     e = &m->e[m->n++];
     memset(e, 0, sizeof(*e));
     e->menu = menu;
@@ -208,7 +216,7 @@ static int add(struct gk_menus *m, int menu, unsigned id, unsigned flags, const 
     e->shortcut = shortcut;
     e->own = (unsigned char)own;
     put_label(e->label, sizeof(e->label), label);
-    shortcut_text(shortcut, e->keys, sizeof(e->keys));
+    shortcut_text(shown, e->keys, sizeof(e->keys));
     m->sent = 0;
     return 0;
 }
