@@ -107,9 +107,12 @@ static void text_set(struct wswin *s, int k, const char *text) {
 
 /**** what the window shows, from the model ****/
 
-/* a setting's value as the window shows it: the one asked for while its change runs */
+/* a setting's value as the window shows it: the newest step, in force and waiting to be written (the review's L3);
+   else the one asked for while its change runs */
 static const char *shown(const struct wsettings *m, const char *key) {
     const struct netctl_setting *e = ws_setting(m, key);
+    int i;
+    for(i = 0; i < WS_STEPS; i++) if(m->step[i].key[0] && !strcmp(m->step[i].key, key)) return m->step[i].value;
     if(m->job && m->job_op == NETCTL_SET && !strcmp(m->job_key, key)) return m->job_value;
     return e ? e->value : "";
 }
@@ -210,6 +213,8 @@ static void system_sync(struct wswin *s) {
                   "them (settings=off): a change is for the next." : !m->settings.can_save ? " This stick is only read: "
                   "a change lasts until SurfOS restarts." : "");
     text_set(s, T_WHERE, b);
+    show(s->save_again, ws_unsaved(m) > 0);             /* in force here, not on the stick: written again on a click */
+    enable(s->save_again, !m->job);
 }
 
 static void wifi_sync(struct wswin *s) {
@@ -301,6 +306,8 @@ static void show_model(struct wswin *s) {
     set_value(s->tabs, m->page);
     for(k = 0; k < WS_PAGES; k++) gk_menu_check(s->ui, MENU_PAGE + k, k == m->page);
     panel_sync(s);
+    if(s->asked == WS_ASK_PASSWORD || s->asked == WS_ASK_OTHER) set_text(s->ask_save, ws_save_label(m));
+    enable(s->ask_yes, !(m->job && ws_answer_starts(m)));  /* a job runs: the answer waits, the box stays (L2) */
     wifi_sync(s);
     network_sync(s);
     desktop_sync(s);
@@ -340,6 +347,7 @@ static int clicked(struct wswin *s, int id) {
     case ID_OTHER:    return ws_join_other(m);
     case ID_FORGET:   return ws_forget(m, ws_saved_selected(m));
     case ID_HOST_SET: return ws_set_host(m, gk_text(s->host));
+    case ID_SAVE_AGAIN: return ws_save_again(m);
     case ID_ASK_YES:  return panel_yes(s);
     case ID_ASK_NO:   return ws_answer(m, 0);
     }
@@ -374,7 +382,7 @@ static int activated(struct wswin *s, const struct gk_event *ev) {
     case ID_ASK_NAME:
         gk_focus(s->ask_pass);                          /* Enter in the name goes on to the password */
         return 0;
-    case ID_ASK_PASS: return panel_yes(s);
+    case ID_ASK_PASS: return gk_enabled(s->ask_yes) ? panel_yes(s) : 0;    /* greyed: the password stays typed */
     }
     return 0;
 }
@@ -506,6 +514,8 @@ static void build_system(struct wswin *s, struct gk_widget *page) {
     text_area(s, T_HISTORY, col, 2, 0, 1);
     gk_separator(col);
     text_area(s, T_WHERE, col, 3, 0, 0);
+    s->save_again = gk_button(col, "Save again on the stick", ID_SAVE_AGAIN);
+    show(s->save_again, 0);
 }
 
 static void build_about(struct wswin *s, struct gk_widget *page) {
@@ -535,7 +545,7 @@ static void build_panel(struct wswin *s, struct gk_widget *panel) {
     s->ask_pass_row = labelled(panel, "Password:");
     s->ask_pass = gk_field(s->ask_pass_row, ID_ASK_PASS, NETCTL_PASS_MAX - 1, GK_PASSWORD);
     gk_grow(s->ask_pass, 1, 0);
-    s->ask_save = gk_check(panel, "Save it on the stick: SurfOS joins it by itself at startup", ID_ASK_SAVE, 1);
+    s->ask_save = gk_check(panel, "Save it: SurfOS joins it by itself at every start", ID_ASK_SAVE, 0);
     gk_spacer(panel);
     row = gk_hbox(panel, 8);
     gk_spacer(row);

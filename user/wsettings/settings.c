@@ -34,6 +34,7 @@ a system call or draws: main.c does both.
 #include "settings.h"
 
 /* the kernel's error numbers (include/fs/vfs.h), which SYS_netctl answers: the host's may differ, so the tests' too */
+#define E_PERM       1
 #define E_NOENT      2
 #define E_NOMEM      12
 #define E_ACCES      13
@@ -325,6 +326,8 @@ static void say_refused(struct wsettings *m, int op, int r, const char *name) {
     else if(r == -E_NODEV) say(m, m->have_wifi && m->wifi.present ? "The Wi-Fi card is off: turn it on first" :
                                   "There is no Wi-Fi card (no driver found one)", NULL, NULL, NULL);
     else if(r == -E_ACCES) say(m, "%s takes a password", name, NULL, NULL);
+    else if(r == -E_PERM && op == NETCTL_JOIN) say(m, "%s is open, and a server without a password runs: asked first",
+                                                   name, NULL, NULL);
     else if(r == -E_NOSYS && op == NETCTL_JOIN) say(m, "SurfOS cannot join %s: its security is one SurfOS does not "
                                                        "speak, or this SurfOS has no WPA2", name, NULL, NULL);
     else if(r == -E_NOSYS) say(m, "This SurfOS has no network settings for programs (SYS_netctl)", NULL, NULL, NULL);
@@ -419,12 +422,34 @@ static const char *join_failure(int r) {
     }
 }
 
+static int ask_exposed(struct wsettings *m, const unsigned char *ssid, int len, int save);
+
+/* a setting that acts when it is set, under a start that uses the settings: one not saved is in force all the same (the
+   network manager keeps telnetd's change only when it is saved: it acts at a start) */
+static int in_force_unsaved(const struct wsettings *m, const char *key) {
+    return !(m->have_settings && m->settings.off) && strcmp(key, "telnetd") && strcmp(key, "telnetd.port");
+}
+
+/* key among the settings in force but not saved (unsaved 1), or no longer (0) */
+static void unsaved_mark(struct wsettings *m, const char *key, int unsaved) {
+    int i;
+    for(i = 0; i < m->nunsaved && strcmp(m->unsaved[i], key); i++) ;
+    if(unsaved && i == m->nunsaved && m->nunsaved < NETCTL_KEYS_MAX) {
+        snprintf(m->unsaved[m->nunsaved++], NETCTL_KEY_MAX, "%s", key);
+    } else if(!unsaved && i < m->nunsaved) {
+        memmove(m->unsaved[i], m->unsaved[i + 1], (size_t)(m->nunsaved - i - 1) * NETCTL_KEY_MAX);
+        m->nunsaved--;
+    }
+}
+
 /* the job ended (j): what came of it, in words */
 static void say_outcome(struct wsettings *m, const struct netctl_job *j) {
     char name[WS_NAME], ip[16], tail[WS_STATUS];
+    size_t at;
     ws_ssid_text(m->job_ssid, m->job_ssid_len, name, sizeof(name));
     ws_ip(m->have_wifi ? m->wifi.ip : 0, ip, sizeof(ip));
     tail[0] = 0;
+    m->said_scan = 0;
     switch(m->job_op) {
     case NETCTL_SCAN:
         if(j->result) say(m, "The scan failed: %s", join_failure(j->result), NULL, NULL);
@@ -439,6 +464,10 @@ static void say_outcome(struct wsettings *m, const struct netctl_job *j) {
         }
         break;
     case NETCTL_JOIN:
+        if(j->result == -E_PERM && (j->flags & NETCTL_DONE_EXPOSED)) {     /* a server started while it looked */
+            ask_exposed(m, m->job_ssid, m->job_ssid_len, m->job_save);
+            break;
+        }
         if(j->result) {                                 /* why: what the job's own scan found (kernel/netctl.c) */
             say(m, "Could not join %s: %s", name, j->why[0] ? j->why : join_failure(j->result), NULL);
             break;
@@ -447,6 +476,10 @@ static void say_outcome(struct wsettings *m, const struct netctl_job *j) {
             snprintf(tail, sizeof(tail), "; saved: SurfOS joins it by itself at startup");
         else if(j->flags & NETCTL_DONE_NOT_SAVED)
             snprintf(tail, sizeof(tail), "; not saved: %s", j->why);
+        at = strlen(tail);
+        if(j->flags & NETCTL_DONE_EXPOSED)              /* the person was told: said again with what came of it */
+            snprintf(tail + at, sizeof(tail) - at, "%s", "; it is open, and a server without a password runs: anyone "
+                     "on it reaches that server");
         if(j->flags & NETCTL_DONE_ADDRESS) say(m, "Joined %s: address %s%s", name, ip, tail);
         else say(m, "Joined %s, but no address came (DHCP)%s", name, tail, NULL);
         break;
@@ -489,14 +522,16 @@ static void say_outcome(struct wsettings *m, const struct netctl_job *j) {
                !strcmp(m->job_key, "telnetd.port"))
                 snprintf(m->status, sizeof(m->status), "%s = %s not saved: %s; nothing changes", m->job_key,
                          m->job_value, j->why);
-            else snprintf(m->status, sizeof(m->status), "%s = %s is in force until SurfOS restarts, but not saved: %s",
-                          m->job_key, m->job_value, j->why);
+            else snprintf(m->status, sizeof(m->status), "%s = %s is in force until SurfOS restarts, but not saved: %s "
+                          "(System > Save again, once the stick takes it)", m->job_key, m->job_value, j->why);
         } else if(m->have_settings && m->settings.off) {
             say(m, "%s = %s, saved on the stick: from the next start (this one does not read the settings)",
                 m->job_key, m->job_value, NULL);
         } else {
             say(m, "%s = %s, saved on the stick: %s", m->job_key, m->job_value, when(m->job_key, m->job_value));
         }
+        if(!j->result)
+            unsaved_mark(m, m->job_key, (j->flags & NETCTL_DONE_NOT_SAVED) && in_force_unsaved(m, m->job_key));
         break;
     }
 }
@@ -506,12 +541,51 @@ static void say_outcome(struct wsettings *m, const struct netctl_job *j) {
 /* step i written now, by a NETCTL_SET job; kept for a later try while the kernel is busy with another program's job */
 static void write_step(struct wsettings *m, int i, int *draw) {
     struct netctl_req r;
+    if(!strcmp(m->step[i].value, m->step[i].from)) {    /* stepped away and back: the value of before, nothing new */
+        say(m, "%s = %s, as it was before the steps: nothing written", m->step[i].key, m->step[i].value, NULL);
+        memset(&m->step[i], 0, sizeof(m->step[i]));
+        *draw |= WS_DRAW;
+        return;
+    }
     memset(&r, 0, sizeof(r));
     snprintf(r.key, sizeof(r.key), "%s", m->step[i].key);
     snprintf(r.value, sizeof(r.value), "%s", m->step[i].value);
     *draw |= start(m, NETCTL_SET, &r, sizeof(r), NULL, 0, r.key, r.value, 0);
     if(m->job || m->refused != -E_BUSY) memset(&m->step[i], 0, sizeof(m->step[i]));
     else m->step[i].at = m->now;                        /* busy: again once the time has passed again */
+}
+
+/**** settings in force but not saved, written again (the review's L4) ****/
+
+/* the first of them, with the value in force now: a job (its outcome takes it off the list); the rest follow it */
+static int save_next(struct wsettings *m) {
+    const struct netctl_setting *s;
+    struct netctl_req r;
+    while(m->nunsaved && !(s = ws_setting(m, m->unsaved[0]))) unsaved_mark(m, m->unsaved[0], 0);  /* not in the table */
+    if(!m->nunsaved) {
+        m->again = 0;
+        return 0;
+    }
+    memset(&r, 0, sizeof(r));
+    snprintf(r.key, sizeof(r.key), "%s", s->name);
+    snprintf(r.value, sizeof(r.value), "%s", s->value);
+    return start(m, NETCTL_SET, &r, sizeof(r), NULL, 0, r.key, r.value, 0);
+}
+
+int ws_unsaved(const struct wsettings *m) {
+    return m->nunsaved;
+}
+
+/* netman_set() writes a value the stick may already hold, so a setting written again with its own value is saved: the
+   settings command's way too, which is why steps that end where they began are dropped here and not there */
+int ws_save_again(struct wsettings *m) {
+    int r;
+    if(!m->nunsaved) return 0;
+    if(m->job) return wait_first(m);
+    m->again = 1;
+    r = save_next(m);
+    if(!m->job) m->again = 0;                           /* refused at the start: said */
+    return r;
 }
 
 /* the steps waiting (all: every one, closing; else those whose steps stopped) written as far as jobs allow, one at a
@@ -546,6 +620,7 @@ int ws_choose(struct wsettings *m, const char *name, const char *value) {
         write_step(m, i, &draw);
         if(m->step[i].key[0]) return ws_set(m, name, value);
     }
+    if(!m->step[i].key[0]) snprintf(m->step[i].from, sizeof(m->step[i].from), "%s", s->value);  /* the first step's */
     if(rc == 0) snprintf(s->value, sizeof(s->value), "%s", value);    /* in force, as the next read will say */
     snprintf(m->step[i].key, sizeof(m->step[i].key), "%s", name);
     snprintf(m->step[i].value, sizeof(m->step[i].value), "%s", value);
@@ -561,16 +636,27 @@ int ws_tick(struct wsettings *m) {
     int draw = 0, r;
     if(m->job) {
         r = m->netctl(m->ctx, NETCTL_JOB, &j, sizeof(j));
-        if(r < 0 || (int)j.seq != m->job || j.state != NETCTL_JOB_RUNNING) {
-            int quiet = m->job_quiet;
+        if(r < 0 && r != -E_NOSYS) {
+            ;                                           /* not read now (-ENOMEM): the job runs on; read again next tick */
+        } else if(r < 0 || (int)j.seq != m->job || j.state != NETCTL_JOB_RUNNING) {
+            int quiet = m->job_quiet, saved = 0;
             ws_refresh(m);                              /* what it changed */
             if(r == 0 && (int)j.seq == m->job && j.state == NETCTL_JOB_DONE) {
                 if(!quiet || j.result == 0) say_outcome(m, &j);
+                saved = m->job_op == NETCTL_SET && !j.result && !(j.flags & NETCTL_DONE_NOT_SAVED);
             } else if(!quiet) {
                 say(m, "Done (its outcome was not seen: the kernel's record moved on)", NULL, NULL, NULL);
             }
             m->job = 0;
             if(m->job_op == NETCTL_CARD && m->job_value[0] == '1' && !m->nnets) m->scanned = -1;  /* nothing heard: a scan */
+            if(m->again) {                              /* Save again: the next one, while the stick takes them */
+                if(!saved || m->closing) m->again = 0;
+                else if(m->nunsaved) save_next(m);
+                else {
+                    m->again = 0;
+                    say(m, "The settings in force are saved on the stick again", NULL, NULL, NULL);
+                }
+            }
             draw = WS_DRAW;
         } else if(j.stage != m->job_stage) {
             m->job_stage = j.stage;
@@ -584,7 +670,7 @@ int ws_tick(struct wsettings *m) {
        started with nothing heard, and at a look with nothing heard in the last minute; quietly: a busy card is no
        news */
     if(!m->job && m->scanned <= 0 && m->page == WS_WIFI && m->have_wifi && m->wifi.present && m->wifi.up &&
-       !m->no_call) {
+       !m->no_call && !m->ask.kind) {                  /* (not under a question: its answer may start a job) */
         m->scanned = 1;
         draw |= start(m, NETCTL_SCAN, NULL, 0, NULL, 0, NULL, NULL, 1);
     }
@@ -709,7 +795,7 @@ static void ask(struct wsettings *m, int kind, const unsigned char *ssid, int le
         memcpy(m->ask.ssid, ssid, (size_t)len);
         m->ask.ssid_len = len;
     }
-    m->ask.save = m->have_settings && m->settings.can_save;
+    m->ask.save = 0;                                    /* unticked: a join saves nothing unless asked (wifi join) */
     snprintf(m->ask.title, sizeof(m->ask.title), "%s", title);
     snprintf(m->ask.yes, sizeof(m->ask.yes), "%s", yes);
     snprintf(m->ask.no, sizeof(m->ask.no), "%s", no);
@@ -726,15 +812,35 @@ static int exposed_text(const struct wsettings *m, char *out, int n) {
     return 1;
 }
 
-static int join_open(struct wsettings *m, const unsigned char *ssid, int len, int save) {
+/* the kernel refused an open join: a server without a password runs (one may have started since the last read, or
+   while the job looked for the network). Asked with what is true now; its Join is the person's word */
+static int ask_exposed(struct wsettings *m, const unsigned char *ssid, int len, int save) {
+    char why[300], name[WS_NAME];
+    ws_refresh(m);
+    ws_ssid_text(ssid, len, name, sizeof(name));
+    if(!exposed_text(m, why, sizeof(why)))
+        snprintf(why, sizeof(why), "%s", "A server without a password runs, and anyone on an open network reaches it. ");
+    ask(m, WS_ASK_OPEN, ssid, len, "Join an open network", "Join", "Cancel");
+    m->ask.save = save;
+    snprintf(m->ask.text, sizeof(m->ask.text), "%sJoin %s all the same?", why, name);
+    say(m, "%s is open, and a server without a password runs: asked first", name, NULL, NULL);
+    return WS_DRAW;
+}
+
+/* told: the person answered the warning about a server without a password (NETCTL_JOIN_EXPOSED); the only way the
+   flag is ever set */
+static int join_open(struct wsettings *m, const unsigned char *ssid, int len, int save, int told) {
     struct netctl_join j;
     int r;
     memset(&j, 0, sizeof(j));
     memcpy(j.ssid, ssid, (size_t)len);
     j.ssid_len = (unsigned)len;
-    j.flags = save ? NETCTL_JOIN_SAVE : 0;
+    j.flags = (save ? NETCTL_JOIN_SAVE : 0) | (told ? NETCTL_JOIN_EXPOSED : 0);
+    m->refused = 0;
     r = start(m, NETCTL_JOIN, &j, sizeof(j), ssid, len, NULL, NULL, 0);
     wipe(&j, sizeof(j));
+    if(m->job) m->job_save = save;
+    else if(m->refused == -E_PERM) return ask_exposed(m, ssid, len, save);
     return r;
 }
 
@@ -764,7 +870,7 @@ int ws_join(struct wsettings *m, int i) {
             snprintf(m->ask.text, sizeof(m->ask.text), "%sJoin %s all the same?", why, name);
             return WS_DRAW;
         }
-        return join_open(m, n->ssid, n->ssid_len, 0);
+        return join_open(m, n->ssid, n->ssid_len, 0, 0);
     }
     ask(m, WS_ASK_PASSWORD, n->ssid, n->ssid_len, "Join a network", "Join", "Cancel");
     snprintf(m->ask.text, sizeof(m->ask.text), "Password for %s (%s):", name, ws_security_name(n->security));
@@ -800,6 +906,10 @@ int ws_join_answer(struct wsettings *m, const char *name, int name_len, char *pa
     if(kind != WS_ASK_PASSWORD && kind != WS_ASK_OTHER) {
         if(password) wipe(password, (unsigned)plen);
         return 0;
+    }
+    if(m->job) {                                        /* the box stays (the window greys its Join meanwhile) */
+        if(password) wipe(password, (unsigned)plen);
+        return wait_first(m);
     }
     if(kind == WS_ASK_OTHER) {
         if(!name || name_len <= 0 || name_len > NETCTL_SSID_MAX) {
@@ -840,8 +950,11 @@ int ws_join_answer(struct wsettings *m, const char *name, int name_len, char *pa
     if(need) memcpy(j.passphrase, password, plen + 1);
     if(password) wipe(password, (unsigned)plen);        /* the caller's copy goes now; the kernel wipes j's */
     m->ask.kind = WS_ASK_NONE;
+    m->refused = 0;
     r = start(m, NETCTL_JOIN, &j, sizeof(j), ssid, len, NULL, NULL, 0);
     wipe(&j, sizeof(j));
+    if(m->job) m->job_save = save;
+    else if(m->refused == -E_PERM) return ask_exposed(m, ssid, len, save);   /* a server started since the last read */
     return r;
 }
 
@@ -874,15 +987,30 @@ int ws_forget(struct wsettings *m, int i) {
     return WS_DRAW;
 }
 
+int ws_answer_starts(const struct wsettings *m) {
+    int k = m->ask.kind;
+    return k == WS_ASK_PASSWORD || k == WS_ASK_OTHER || k == WS_ASK_OPEN || k == WS_ASK_FORGET || k == WS_ASK_TELNETD;
+}
+
+/* what saving a network means while telnetd is on or to start: it starts on a saved WPA2 network at every start (the
+   review's M3); the box itself is unticked for every join */
+const char *ws_save_label(const struct wsettings *m) {
+    const struct netctl_setting *t = ws_setting(m, "telnetd");
+    int due = (t && !strcmp(t->value, "on")) || (m->have_wifi && (m->wifi.exposed & NETCTL_EXPOSED_TELNET));
+    return due ? "Save it: joined by itself at every start, and telnetd starts on it" :
+                 "Save it: SurfOS joins it by itself at every start";
+}
+
 int ws_answer(struct wsettings *m, int yes) {
     struct ws_ask a = m->ask;
     struct netctl_req r;
+    if(yes && m->job && ws_answer_starts(m)) return wait_first(m);    /* the question stays until the job has ended */
     memset(&m->ask, 0, sizeof(m->ask));
     if(a.kind == WS_ASK_CLOSE) return yes ? close_now(m) : WS_DRAW;
     if(!yes || a.kind == WS_ASK_NONE) return WS_DRAW;
     switch(a.kind) {
     case WS_ASK_OPEN:
-        return join_open(m, a.ssid, a.ssid_len, a.save);
+        return join_open(m, a.ssid, a.ssid_len, a.save, 1);    /* the person's word: the kernel may join it so */
     case WS_ASK_FORGET:
         memset(&r, 0, sizeof(r));
         memcpy(r.ssid, a.ssid, (size_t)a.ssid_len);

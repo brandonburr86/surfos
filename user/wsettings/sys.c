@@ -22,7 +22,7 @@ extended leaves 0x80000002 to 0x80000004 hold the brand string; leaf 0 the vendo
 #include "sys.h"
 
 /* the model counts on the kernel's numbers (settings.c's E_*), which are this library's (ECANCELED, 125, it lacks) */
-typedef char errors_are_the_kernels[ENOENT == 2 && ENOMEM == 12 && EACCES == 13 && EBUSY == 16 && ENODEV == 19 &&
+typedef char errors_are_the_kernels[EPERM == 1 && ENOENT == 2 && ENOMEM == 12 && EACCES == 13 && EBUSY == 16 && ENODEV == 19 &&
                                     EINVAL == 22 && ENOSYS == 38 && ETIMEDOUT == 110 && ECONNREFUSED == 111 &&
                                     ECONNRESET == 104 ? 1 : -1];
 

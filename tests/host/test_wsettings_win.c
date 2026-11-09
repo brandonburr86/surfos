@@ -158,7 +158,11 @@ static void join_wpa2(void) {
     click_on(s.join);
     CHECK(run() && gk_value(s.main) == 1 && s.asked == WS_ASK_PASSWORD && gk_focused(s.ui) == s.ask_pass);
     CHECK(shows(T_ASK, "Password for SurfSimWPA (WPA2-Personal):") && gk_shown(s.ask_pass_row) &&
-          !gk_shown(s.ask_name_row) && gk_value(s.ask_save) == 1);
+          !gk_shown(s.ask_name_row) && gk_value(s.ask_save) == 0);     /* unticked: saved only when asked (M3) */
+    CHECK(!strcmp(gk_text(s.ask_save), "Save it: SurfOS joins it by itself at every start"));
+    click_on(s.ask_save);                               /* ticked here: the save is tested below */
+    CHECK(run() && gk_value(s.ask_save) == 1);
+    gk_focus(s.ask_pass);
     CHECK(!strcmp(gk_text(s.ask_yes), "Join") && !strcmp(gk_text(s.ask_no), "Cancel"));
     CHECK(!strcmp(gkf_title(), "Settings - Wi-Fi"));
     gkf_type("short\n");                                /* too short: the panel stays, its field wiped, its words new */
@@ -173,7 +177,8 @@ static void join_wpa2(void) {
     gkf_key('\r', 0);
     CHECK(run() && !strcmp(k.last_join.passphrase, PASSPHRASE) && k.last_join.flags == NETCTL_JOIN_SAVE);
     CHECK(k.last_join.ssid_len == 10 && !memcmp(k.last_join.ssid, "SurfSimWPA", 10));
-    CHECK(!gk_text(s.ask_pass)[0] && gk_value(s.main) == 0 && s.asked == WS_ASK_NONE);   /* wiped at once, gone */
+    CHECK(!memcmp(gk_text(s.ask_pass), zero, NETCTL_PASS_MAX) && gk_value(s.main) == 0 &&   /* every byte (max + 1) */
+          s.asked == WS_ASK_NONE);                      /* wiped at once, gone */
     CHECK(!in_window("surfsim-wpa2") && !in_window(PASSPHRASE));
     CHECK(band_says("Joining SurfSimWPA...") && !gk_enabled(s.scan) && !gk_enabled(s.join));
     k.job.stage = NETCTL_STAGE_ADDRESS;
@@ -312,7 +317,18 @@ static void system_page(void) {
     job_done(0, NETCTL_DONE_NOT_SAVED, "usb1 is write-protected (its switch)");
     CHECK(tick(WSW_TICK_MS) && gk_value(s.history) == 0);  /* not in force: the kernel's off again */
     CHECK(band_says("history = on is in force until SurfOS restarts, but not saved: usb1 is write-protected (its "
-                    "switch)"));
+                    "switch) (System > Save again, once the stick takes it)"));
+    /* L4: what is in force here but not saved, written again from the System page once the stick takes it */
+    strcpy(setting("history")->value, "on");            /* the network manager keeps it in force */
+    CHECK(tick(WS_READ_MS) && gk_shown(s.save_again) && gk_enabled(s.save_again) && gk_value(s.history) == 1);
+    click_on(s.save_again);
+    CHECK(run() && s.m.job && !strcmp(k.last_req.key, "history") && !strcmp(k.last_req.value, "on"));
+    CHECK(!gk_enabled(s.save_again));                   /* greyed while it runs */
+    job_done(0, 0, NULL);
+    CHECK(tick(WSW_TICK_MS) && !gk_shown(s.save_again) &&
+          band_says("The settings in force are saved on the stick again"));
+    strcpy(setting("history")->value, "off");
+    CHECK(tick(WS_READ_MS));
 }
 
 static void network_page(void) {
@@ -418,6 +434,71 @@ static void quiet_when_nothing_changes(void) {
     CHECK(n >= 1 && w * h < WSW_W * WSW_H / 2);
 }
 
+static int row_of(const char *ssid) {
+    int i;
+    for(i = 0; i < s.m.nnets; i++)
+        if(s.m.nets[i].ssid_len == (int)strlen(ssid) && !memcmp(s.m.nets[i].ssid, ssid, strlen(ssid))) return i;
+    return -1;
+}
+
+/* the review's fixes in the window (11/05/26): M2 the question when the kernel refuses an open join, M3 Save it, L2 the
+   panel's Join greyed while a job runs (Enter too: the password stays typed), L3 the newest step shown while a write
+   runs */
+static void review_window(void) {
+    static const char zero[NETCTL_PASS_MAX];
+    int starts;
+    gkf_key(WIN_KEY_F5, 0);
+    k.wifi.state = NETCTL_STA_IDLE;
+    CHECK(run() && s.m.page == WS_WIFI && tick(WS_READ_MS));
+    /* M2: a server started since the last read: the kernel refuses, and the panel asks with what is true now */
+    k.wifi.exposed = NETCTL_EXPOSED_TELNET;
+    CHECK(ws_select_net(&s.m, row_of("SurfSim")) >= 0 && tick(WSW_TICK_MS) && gk_enabled(s.join));
+    click_on(s.join);
+    CHECK(run() && s.asked == WS_ASK_OPEN && gk_value(s.main) == 1 && !s.m.job && !k.last_join.flags);
+    CHECK(!strncmp(s.text[T_ASK].text, "A telnet server runs or is to start", 35) && whole(T_ASK));
+    click_on(s.ask_yes);
+    CHECK(run() && s.m.job && k.last_join.flags == NETCTL_JOIN_EXPOSED);
+    job_done(0, NETCTL_DONE_EXPOSED, NULL);
+    CHECK(tick(WSW_TICK_MS) && strstr(s.text[T_MSG].text, "it is open, and a server without a password runs") != NULL);
+    /* M3, L2: Save it unticked, saying what saving means while telnetd is on; a scan started meanwhile (Ctrl+R) greys
+       the panel's Join, and Enter waits with the password still typed */
+    k.wifi.exposed = 0;
+    strcpy(setting("telnetd")->value, "on");
+    CHECK(tick(WS_READ_MS) && ws_select_net(&s.m, row_of("SurfSimWPA")) >= 0 && tick(WSW_TICK_MS));
+    click_on(s.join);
+    CHECK(run() && s.asked == WS_ASK_PASSWORD && gk_value(s.ask_save) == 0 && gk_enabled(s.ask_yes));
+    CHECK(!strcmp(gk_text(s.ask_save), "Save it: joined by itself at every start, and telnetd starts on it"));
+    gkf_type(PASSPHRASE);
+    gkf_key(18, WIN_MOD_CTRL);
+    CHECK(run() && s.m.job && k.last_op == NETCTL_SCAN && !gk_enabled(s.ask_yes) && s.asked == WS_ASK_PASSWORD);
+    starts = k.starts;
+    gkf_key('\r', 0);
+    CHECK(run() && k.starts == starts && s.asked == WS_ASK_PASSWORD && strlen(gk_text(s.ask_pass)) == strlen(PASSPHRASE));
+    job_done(0, 0, NULL);
+    CHECK(tick(WSW_TICK_MS) && gk_enabled(s.ask_yes) && s.asked == WS_ASK_PASSWORD);
+    gkf_key('\r', 0);
+    CHECK(run() && k.last_op == NETCTL_JOIN && !strcmp(k.last_join.passphrase, PASSPHRASE) && !k.last_join.flags);
+    CHECK(!memcmp(gk_text(s.ask_pass), zero, NETCTL_PASS_MAX) && !in_window(PASSPHRASE));
+    job_done(0, 0, NULL);
+    strcpy(setting("telnetd")->value, "off");
+    CHECK(tick(WS_READ_MS));
+    /* L3: a step's write runs, and a newer click comes: the radio shows the newer one */
+    gkf_key(WIN_KEY_F7, 0);
+    CHECK(run() && s.m.page == WS_DESKTOP && gk_value(s.theme) == 1);    /* dusk, as desktop_and_about left it */
+    gkf_advance(600);
+    gkf_click(156 + 8, 43 + 6);                         /* Ocean */
+    CHECK(run() && gk_value(s.theme) == 0);
+    CHECK(tick(WS_WRITE_AFTER_MS + WSW_TICK_MS) && s.m.job && !strcmp(k.last_req.value, "ocean"));
+    gkf_advance(600);
+    gkf_click(232 + 8, 43 + 6);                         /* Dusk, while ocean is written */
+    CHECK(run() && gk_value(s.theme) == 1 && s.m.job && !strcmp(s.m.job_value, "ocean"));
+    job_done(0, 0, NULL);
+    CHECK(tick(WSW_TICK_MS) && gk_value(s.theme) == 1);
+    CHECK(tick(WS_WRITE_AFTER_MS) && s.m.job && !strcmp(k.last_req.value, "dusk"));    /* and then the newer written */
+    job_done(0, 0, NULL);
+    CHECK(tick(WSW_TICK_MS) && gk_value(s.theme) == 1 && !s.m.job);
+}
+
 static void closing(void) {
     gkf_close();                                        /* the host name typed: asked; Close ends it */
     CHECK(run() && s.asked == WS_ASK_CLOSE);
@@ -457,6 +538,7 @@ int main(void) {
     network_page();
     desktop_and_about();
     quiet_when_nothing_changes();
+    review_window();
     closing();
     printf("test_wsettings_win: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

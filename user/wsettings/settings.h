@@ -67,7 +67,7 @@ struct ws_ask {
     int kind;
     unsigned char ssid[NETCTL_SSID_MAX];    /* the network it is about */
     int ssid_len;
-    int save;                           /* the box's Save it, as it starts */
+    int save;                           /* the box's Save it, as it starts (unticked for every join: the review's M3) */
     char title[48];
     char text[480];
     char yes[24];                       /* its buttons' words */
@@ -103,8 +103,14 @@ struct wsettings {
     int scanned;                        /* a scan was asked for (1), one is to be by itself (0, -1) */
     struct {                            /* settings in force by their last step (NETCTL_APPLY), to be written (key "": none) */
         char key[NETCTL_KEY_MAX], value[NETCTL_VALUE_MAX];
+        char from[NETCTL_VALUE_MAX];    /* its value before the first step: steps that end there write nothing */
         unsigned at;                    /* the last step's time */
     } step[WS_STEPS];
+    int job_save;                       /* the running join asked to save its network */
+    /* settings this window changed that are in force but were not saved (the stick missing, full, write-protected), the
+       first nunsaved of them; again is set while they are written again one after the other (ws_save_again()) */
+    char unsaved[NETCTL_KEYS_MAX][NETCTL_KEY_MAX];
+    int nunsaved, again;
     int closing;                        /* closing waits for a job to end, to write the last steps */
     int refused;                        /* the kernel's last refusal of a job's start (-errno), 0 */
     struct ws_ask ask;
@@ -144,6 +150,8 @@ int ws_save_joined(struct wsettings *m);
 int ws_joined_saved(const struct wsettings *m);         /* the network joined now is a saved one */
 int ws_forget(struct wsettings *m, int i);              /* the saved row's network: asked about first */
 int ws_answer(struct wsettings *m, int yes);            /* the other boxes' Yes or No */
+int ws_answer_starts(const struct wsettings *m);        /* the question's Yes starts a job (greyed while one runs) */
+const char *ws_save_label(const struct wsettings *m);   /* the join boxes' Save it: what saving means now */
 void ws_wifi_line(const struct wsettings *m, char *out, int n);    /* the card and the network joined */
 /* the lists' rows, their columns apart at tabs: a network in range (its name, the signal in four bars and in dBm, the
    security, joined, saved or not supported), a saved network (its name, its security, its state as wifi saved says it) */
@@ -163,6 +171,8 @@ int ws_choose(struct wsettings *m, const char *name, const char *value);
 int ws_toggle(struct wsettings *m, const char *name);   /* an on | off setting the other way */
 int ws_host_ok(const char *name, char *why, int n);     /* a host name the table takes (as net/netcfg.c's rule) */
 int ws_set_host(struct wsettings *m, const char *name);
+int ws_unsaved(const struct wsettings *m);              /* settings in force here but not saved on the stick */
+int ws_save_again(struct wsettings *m);                 /* write them again, one after the other */
 void ws_iface_lines(const struct wsettings *m, int i, char *a, int an, char *b, int bn, char *c, int cn);
 void ws_about_line(const struct wsettings *m, int k, char *label, int ln, char *value, int vn);   /* k 0-5 */
 

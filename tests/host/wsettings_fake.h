@@ -33,6 +33,8 @@ static struct {
     int refuse;                         /* the next start answers this */
     int starts, last_op, bad;           /* bad: a call with a size or an argument that is none */
     int applies, apply_r;               /* NETCTL_APPLY's calls, and what it answers (0: in force) */
+    int job_read_r;                     /* what the next NETCTL_JOB read answers instead (-12: no memory just then) */
+    int exposed_now;                    /* a server without a password runs, whatever k.wifi (read every 2 s) says */
     struct netctl_req last_apply;
     struct netctl_join last_join;       /* what a join was handed (its password as the kernel saw it) */
     struct netctl_req last_req;
@@ -68,7 +70,13 @@ static int fake_netctl(void *ctx, int op, void *arg, unsigned size) {
     case NETCTL_SAVED:    return fake_read(arg, size, &k.saved, sizeof(k.saved));
     case NETCTL_SETTINGS: return fake_read(arg, size, &k.settings, sizeof(k.settings));
     case NETCTL_IFACES:   return fake_read(arg, size, &k.ifaces, sizeof(k.ifaces));
-    case NETCTL_JOB:      return fake_read(arg, size, &k.job, sizeof(k.job));
+    case NETCTL_JOB:
+        if(k.job_read_r) {
+            int r = k.job_read_r;
+            k.job_read_r = 0;
+            return r;
+        }
+        return fake_read(arg, size, &k.job, sizeof(k.job));
     case NETCTL_APPLY:                                  /* at once, nothing written: the value in force */
         if(size != sizeof(struct netctl_req) || !arg) {
             k.bad++;
@@ -109,6 +117,9 @@ static int fake_netctl(void *ctx, int op, void *arg, unsigned size) {
         return r;
     }
     if(k.job.state == NETCTL_JOB_RUNNING || k.busy_other) return -16;
+    if(op == NETCTL_JOIN && !k.last_join.passphrase[0] && (k.wifi.exposed || k.exposed_now) &&
+       !(k.last_join.flags & NETCTL_JOIN_EXPOSED))
+        return -1;                                      /* EPERM: open, a server without a password runs, nobody told */
     k.last_op = op;
     memset(&k.job, 0, sizeof(k.job));
     k.job.seq = ++k.seq;

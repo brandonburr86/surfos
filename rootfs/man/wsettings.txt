@@ -26,20 +26,24 @@ DESCRIPTION
     A WPA2 network's password is typed in a field that shows a dot for
     each character and copies nothing. It goes to the kernel, which
     makes the network's key of it at once and wipes it; the field is
-    wiped as soon as it is handed on. Save it keeps the network in
-    networks.conf on the stick: the key, never the password.
+    wiped as soon as it is handed on. Save it, unticked until it is
+    ticked, keeps the network in networks.conf on the stick: the key,
+    never the password. While telnetd is on, it says that telnetd will
+    start on that network.
 
     A network not heard in the last minute is looked for first when
     it is joined, as wifi join does, and joined as one that hides its
     name only when it is still not heard.
 
     It asks before joining an open network while a server without a
-    password runs, before forgetting a network, and before turning on
-    telnetd at startup, with the warning the settings command gives.
+    password runs (the kernel joins one then only on that answer),
+    before forgetting a network, and before turning on telnetd at
+    startup, with the warning the settings command gives.
     What each change did, and when it acts, is said in the band at the
     bottom. The settings are kept as the settings command keeps them,
     on the stick SurfOS was started from; a change that cannot be saved
-    there is in force until SurfOS restarts, and says so.
+    there is in force until SurfOS restarts, and says so: System > Save
+    again on the stick writes it once the stick takes it.
 
 KEYS
     F5 to F9         the pages: Wi-Fi, Network, Desktop, System, About

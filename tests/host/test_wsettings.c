@@ -236,7 +236,8 @@ static void join_wpa2(void) {
     started();
     t = row("SurfSimWPA");
     CHECK(ws_join(&m, t) == WS_DRAW && m.ask.kind == WS_ASK_PASSWORD && !m.job && k.starts == 1);
-    CHECK(!strcmp(m.ask.text, "Password for SurfSimWPA (WPA2-Personal):") && m.ask.save == 1);
+    CHECK(!strcmp(m.ask.text, "Password for SurfSimWPA (WPA2-Personal):") && m.ask.save == 0);   /* unticked (M3) */
+    CHECK(!strcmp(ws_save_label(&m), "Save it: SurfOS joins it by itself at every start"));
     CHECK(!strcmp(m.ask.yes, "Join") && !strcmp(m.ask.no, "Cancel"));
     strcpy(pass, "short");                                          /* 8 to 63 characters: the box stays */
     CHECK(ws_join_answer(&m, NULL, 0, pass, 1) == WS_DRAW && m.ask.kind == WS_ASK_PASSWORD && k.starts == 1);
@@ -352,7 +353,8 @@ static void join_open_and_other(void) {
     pass[0] = 0;
     CHECK(ws_join_answer(&m, "Cafe", 4, pass, 1) == WS_DRAW && m.ask.kind == WS_ASK_OPEN && !m.job);
     CHECK(!strncmp(m.ask.text, "An FTP server runs, and it has no password", 42) && strstr(m.ask.text, "Join Cafe all"));
-    CHECK(ws_answer(&m, 1) == WS_DRAW && m.job && k.last_join.ssid_len == 4 && k.last_join.flags == NETCTL_JOIN_SAVE);
+    CHECK(ws_answer(&m, 1) == WS_DRAW && m.job && k.last_join.ssid_len == 4 &&
+          k.last_join.flags == (NETCTL_JOIN_SAVE | NETCTL_JOIN_EXPOSED));     /* the person's word, from that answer */
     job_done(0, NETCTL_DONE_SAVED, NULL);
     m.now += 200;
     ws_tick(&m);
@@ -532,7 +534,7 @@ static void settings_pages(void) {
     m.now += 200;
     ws_tick(&m);
     CHECK(!strcmp(m.status, "ethernet = dhcp is in force until SurfOS restarts, but not saved: usb1 is write-protected "
-                            "(its switch)"));
+                            "(its switch) (System > Save again, once the stick takes it)"));
     CHECK(ws_toggle(&m, "wifi") == WS_DRAW && !strcmp(k.last_req.value, "off"));
     job_done(-22, 0, "wifi is on | off, not maybe");
     m.now += 200;
@@ -787,6 +789,154 @@ static void closing_and_lost_jobs(void) {
     }
 }
 
+/* the review's fixes (11/05/26): M2 an open join while a server without a password runs, M3 Save it unticked, L1 steps
+   back where they began, L2 a question kept while a job runs, L4 settings saved again, L6 a job read that failed */
+static void review_fixes(void) {
+    char pass[64];
+    int applies, starts;
+    start();
+    add_saved("Home", NETCTL_SAVED_WPA2, 0);
+    add_setting("desktop.theme", "ocean", "ocean | dusk");
+    started();
+    /* M2: a server started since the last read: the kernel refuses (EPERM), and the model asks with what is true now */
+    k.wifi.exposed = NETCTL_EXPOSED_TELNET;                         /* the model's copy still says none */
+    CHECK(ws_join(&m, row("SurfSim")) == WS_DRAW && !m.job && m.ask.kind == WS_ASK_OPEN && k.starts == 2);
+    CHECK(!k.last_join.flags);                                      /* the call refused had no word of the person's */
+    CHECK(!strncmp(m.ask.text, "A telnet server runs or is to start, and it has no password", 59) &&
+          strstr(m.ask.text, "Join SurfSim all the same?") != NULL);
+    CHECK(!strcmp(m.status, "SurfSim is open, and a server without a password runs: asked first"));
+    CHECK(ws_answer(&m, 1) == WS_DRAW && m.job && k.last_join.flags == NETCTL_JOIN_EXPOSED);
+    job_done(0, NETCTL_DONE_EXPOSED, NULL);
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(!strcmp(m.status, "Joined SurfSim, but no address came (DHCP); it is open, and a server without a password "
+                            "runs: anyone on it reaches that server"));
+    /* the job's own refusal: a server started while it looked for a network not heard: asked again, Save it kept */
+    k.wifi.exposed = 0;
+    m.now += WS_READ_MS;
+    ws_tick(&m);
+    CHECK(ws_join_other(&m) == WS_DRAW);
+    pass[0] = 0;
+    CHECK(ws_join_answer(&m, "Cafe", 4, pass, 1) == WS_DRAW && m.job && k.last_join.flags == NETCTL_JOIN_SAVE);
+    k.wifi.exposed = NETCTL_EXPOSED_FTP;
+    job_done(-1, NETCTL_DONE_EXPOSED, "a server without a password runs (telnetd or ftpd), and anyone on an open "
+             "network reaches it: not joined without the person's word");
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(!m.job && m.ask.kind == WS_ASK_OPEN && m.ask.save == 1 && strstr(m.ask.text, "An FTP server runs") != NULL);
+    CHECK(ws_answer(&m, 1) == WS_DRAW && m.job && k.last_join.flags == (NETCTL_JOIN_SAVE | NETCTL_JOIN_EXPOSED));
+    job_done(0, NETCTL_DONE_SAVED | NETCTL_DONE_EXPOSED, NULL);
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(strstr(m.status, "; saved: SurfOS joins it by itself at startup; it is open") != NULL);
+    k.wifi.exposed = 0;
+    m.now += WS_READ_MS;
+    ws_tick(&m);
+    /* M3: every join's Save it unticked; with telnetd on, or running, what saving means */
+    CHECK(ws_join(&m, row("SurfSimWPA")) == WS_DRAW && m.ask.kind == WS_ASK_PASSWORD && m.ask.save == 0);
+    snprintf(setting("telnetd")->value, sizeof(setting("telnetd")->value), "%s", "on");
+    m.now += WS_READ_MS;
+    ws_tick(&m);
+    CHECK(!strcmp(ws_save_label(&m), "Save it: joined by itself at every start, and telnetd starts on it"));
+    CHECK(ws_answer(&m, 0) == WS_DRAW && m.ask.kind == WS_ASK_NONE);
+    snprintf(setting("telnetd")->value, sizeof(setting("telnetd")->value), "%s", "off");
+    k.wifi.exposed = NETCTL_EXPOSED_TELNET;                         /* telnetd on in a Terminal: running */
+    m.now += WS_READ_MS;
+    ws_tick(&m);
+    CHECK(ws_join_other(&m) == WS_DRAW && m.ask.save == 0);
+    CHECK(!strcmp(ws_save_label(&m), "Save it: joined by itself at every start, and telnetd starts on it"));
+    CHECK(ws_answer(&m, 0) == WS_DRAW);
+    k.wifi.exposed = 0;
+    m.now += WS_READ_MS;
+    ws_tick(&m);
+    CHECK(!strcmp(ws_save_label(&m), "Save it: SurfOS joins it by itself at every start"));
+    /* L2: a job of this window's runs while the password box is open: the answer waits and the box stays */
+    CHECK(ws_join(&m, row("SurfSimWPA")) == WS_DRAW && m.ask.kind == WS_ASK_PASSWORD && ws_answer_starts(&m));
+    CHECK(ws_scan(&m) == WS_DRAW && m.job);
+    strcpy(pass, PASSPHRASE);
+    CHECK(ws_join_answer(&m, NULL, 0, pass, 0) == WS_DRAW && m.ask.kind == WS_ASK_PASSWORD && !pass[0]);
+    CHECK(!strcmp(m.status, "Wait: the last change is still under way") && k.last_op == NETCTL_SCAN);
+    job_done(0, 0, NULL);
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(!m.job && m.ask.kind == WS_ASK_PASSWORD);                 /* still asked, nothing started by itself */
+    strcpy(pass, PASSPHRASE);
+    CHECK(ws_join_answer(&m, NULL, 0, pass, 0) == WS_DRAW && m.job && k.last_op == NETCTL_JOIN && !k.last_join.flags);
+    job_done(0, 0, NULL);
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(ws_forget(&m, 0) == WS_DRAW && m.ask.kind == WS_ASK_FORGET);
+    CHECK(ws_scan(&m) == WS_DRAW && m.job);
+    CHECK(ws_answer(&m, 1) == WS_DRAW && m.ask.kind == WS_ASK_FORGET && k.last_op == NETCTL_SCAN);   /* it stays */
+    CHECK(ws_answer(&m, 0) == WS_DRAW && m.ask.kind == WS_ASK_NONE);    /* No needs no job */
+    job_done(0, 0, NULL);
+    m.now += 200;
+    ws_tick(&m);
+    /* L1: stepped away and back to the value of before: nothing written */
+    applies = k.applies;
+    starts = k.starts;
+    CHECK(ws_choose(&m, "desktop.theme", "dusk") == WS_DRAW && k.applies == applies + 1);
+    m.now += 300;
+    CHECK(ws_choose(&m, "desktop.theme", "ocean") == WS_DRAW && k.applies == applies + 2);
+    m.now += WS_WRITE_AFTER_MS;
+    ws_tick(&m);
+    CHECK(k.starts == starts && !m.job && !m.step[0].key[0] && !m.step[1].key[0]);
+    CHECK(!strcmp(m.status, "desktop.theme = ocean, as it was before the steps: nothing written"));
+    CHECK(ws_choose(&m, "desktop.theme", "dusk") == WS_DRAW);       /* a step that stays away is written */
+    m.now += WS_WRITE_AFTER_MS;
+    ws_tick(&m);
+    CHECK(m.job && k.starts == starts + 1 && !strcmp(k.last_req.value, "dusk"));
+    job_done(0, 0, NULL);
+    m.now += 200;
+    ws_tick(&m);
+    /* L4: settings in force but not saved (the stick write-protected): Save again writes them one after the other */
+    CHECK(ws_unsaved(&m) == 0 && ws_toggle(&m, "history") == WS_DRAW);
+    snprintf(setting("history")->value, sizeof(setting("history")->value), "%s", "on");     /* in force all the same */
+    job_done(0, NETCTL_DONE_NOT_SAVED, "usb1 is write-protected (its switch)");
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(ws_unsaved(&m) == 1 && ws_toggle(&m, "telnetd") == WS_DRAW && m.ask.kind == WS_ASK_TELNETD);
+    CHECK(ws_answer(&m, 1) == WS_DRAW && m.job);
+    job_done(0, NETCTL_DONE_NOT_SAVED, "usb1 is write-protected (its switch)");
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(ws_unsaved(&m) == 1);                                     /* telnetd not saved is not in force: not counted */
+    CHECK(ws_toggle(&m, "ethernet") == WS_DRAW);
+    snprintf(setting("ethernet")->value, sizeof(setting("ethernet")->value), "%s", "dhcp");
+    job_done(0, NETCTL_DONE_NOT_SAVED, "usb1 is write-protected (its switch)");
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(ws_unsaved(&m) == 2 && !strcmp(m.unsaved[0], "history") && !strcmp(m.unsaved[1], "ethernet"));
+    starts = k.starts;
+    CHECK(ws_save_again(&m) == WS_DRAW && m.job && k.starts == starts + 1);
+    CHECK(!strcmp(k.last_req.key, "history") && !strcmp(k.last_req.value, "on"));     /* the value in force */
+    job_done(0, NETCTL_DONE_NOT_SAVED, "usb1 is write-protected (its switch)");      /* still: it stops there */
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(!m.job && !m.again && ws_unsaved(&m) == 2 && k.starts == starts + 1);
+    CHECK(ws_save_again(&m) == WS_DRAW && m.job && !strcmp(k.last_req.key, "history"));
+    job_done(0, 0, NULL);                                           /* the switch moved: saved */
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(m.job && ws_unsaved(&m) == 1 && !strcmp(k.last_req.key, "ethernet") && !strcmp(k.last_req.value, "dhcp"));
+    job_done(0, 0, NULL);
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(!m.job && !m.again && ws_unsaved(&m) == 0 &&
+          !strcmp(m.status, "The settings in force are saved on the stick again"));
+    CHECK(ws_save_again(&m) == 0);                                  /* nothing to save */
+    /* L6: the job's record could not be read (no memory just then): the job is kept and read again */
+    CHECK(ws_scan(&m) == WS_DRAW && m.job);
+    k.job_read_r = -12;
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(m.job > 0);
+    job_done(0, 0, NULL);
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(!m.job && !strcmp(m.status, "6 networks in range"));
+}
+
 int main(void) {
     words();
     networks_in_range();
@@ -798,6 +948,7 @@ int main(void) {
     network_and_about();
     without_the_call();
     closing_and_lost_jobs();
+    review_fixes();
     CHECK(k.bad == 0);                                              /* every call's size and argument as they should be */
     printf("test_wsettings: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

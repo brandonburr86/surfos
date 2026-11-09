@@ -26,7 +26,7 @@ enum {
     ID_CARD, ID_LEAVE, ID_SAVE, ID_SCAN, ID_NETS, ID_JOIN, ID_OTHER, ID_SAVED, ID_FORGET, ID_STARTUP,     /* Wi-Fi */
     ID_ETHERNET, ID_IFACES, ID_HOST, ID_HOST_SET,                                                     /* Network */
     ID_THEME, ID_POINTER,                                                                             /* Desktop */
-    ID_TELNETD, ID_HISTORY,                                                                           /* System */
+    ID_TELNETD, ID_HISTORY, ID_SAVE_AGAIN,                                                            /* System */
     ID_ASK_NAME, ID_ASK_PASS, ID_ASK_SAVE, ID_ASK_YES, ID_ASK_NO,                                     /* the panel */
     ID_TEXT = 50,                                                       /* ID_TEXT + T_*: the texts drawn here */
     TIMER_TICK = 100,
@@ -53,7 +53,7 @@ struct wswin {
     struct gk_widget *card, *leave, *save, *scan, *nets, *join, *other, *saved, *forget, *startup;
     struct gk_widget *ethernet, *ifaces, *host, *host_set;
     struct gk_widget *theme_row, *theme, *pointer_row, *pointer;
-    struct gk_widget *telnetd, *history;
+    struct gk_widget *telnetd, *history, *save_again;
     struct gk_widget *about_value[WSW_ABOUT_ROWS];
     struct gk_widget *ask_title, *ask_name_row, *ask_name, *ask_pass_row, *ask_pass, *ask_save, *ask_yes, *ask_no;
     struct wsw_text text[T_TEXTS];
