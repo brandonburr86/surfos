@@ -17,6 +17,9 @@ The account of track code of `docs/superpowers/plans/2026-11-05-desktop-apps.md`
   assumed in a chooser's bar, `-EBUSY` from a chooser said as the desktop being busy, the Help item named after the
   program, the close button pressed again while the program asks (its question stands), no `ttyctl`.
 
+- **The review's fix round: done** (11/09/26): every finding fixed and tested (under "The review"), kit's aac42b11
+  merged (its chooser check), the gates passed.
+
 Nothing of it has run on the laptop; it has run under QEMU only.
 
 ## What is built
@@ -322,6 +325,14 @@ with its test (the review's own probes, in its scratch folder, were run against 
   its ops' block is refused after its bytes' grew; closing the last tab makes the new file first (it stays when there
   is no memory, said), no longer freeing what it then used; with several files named, a later one opened leaves an
   earlier refusal said; the manual says that empty matches are never found.
+
+**The fix round's gates**, as the coordinator set them (a track that changes only its own files runs no test-all; the
+integration's gate does): guiapps, the whole scenario, on cf82bafa (with kit's aac42b11): 383 of 383 at O2 and at
+O0, this track's 29 among them. `make unittest` on cf82bafa failed one check of test_wcode, its own new time bound
+(0.5 s for three searches on a 1 MB line that take 0.02 s on the Mac, in the image's emulated 32-bit build under
+load); the bounds were widened tenfold (c55265cb: they catch the quadratic searches, which took hours there), and
+`make unittest` on c55265cb passed: test_wcode 527,441, test_wcode_save 69, test_wcode_win 91. c55265cb changes only
+that test, which is in no image, so the guiapps runs stand for it. `mac-sanitize.sh` (60 rounds): all passed.
 
 The tests for these are in `tests/host/test_wcode.c` (`review()`), `test_wcode_save.c` (two windows of one file, a
 device by another name, lone CRs, and every comparison by bytes and count) and `test_wcode_win.c` (the catch-up after
