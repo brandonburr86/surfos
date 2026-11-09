@@ -70,4 +70,13 @@ int ut_transport_eof_clean(const struct ut_transport *t);
    a read that waited for it would end it after UT_IDLE_MS */
 int ut_transport_fd(const struct ut_transport *t);
 
+/* 11/09/26 (the desktop applications, track chat, additive): ut_transport_read() without its wait, for a reader that
+   waits with poll() on ut_transport_fd(): 1..len bytes, 0 at the end, -1 when the connection has failed, as
+   ut_transport_read(), or UT_TRANSPORT_AGAIN when nothing came: what poll() saw was only part of a record, or a record
+   with no data in it (a TLS 1.3 session ticket, a TLS 1.2 HelloRequest), which ut_transport_read() would have waited
+   past, up to UT_IDLE_MS. The deadline holds as for ut_transport_read(). wchat's helper reads so: a server that sends
+   its tickets and then waits for the client's first lines would otherwise wait for the helper as it waits for it */
+#define UT_TRANSPORT_AGAIN (-2)
+int ut_transport_read_now(struct ut_transport *t, void *buf, size_t len);
+
 #endif

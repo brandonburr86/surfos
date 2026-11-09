@@ -1781,6 +1781,18 @@ test-undertow-transport: $(BUILD)/host/test_undertow_transport $(BUILD)/user/bin
 	$(BUILD)/host/test_undertow_transport tests/host/undertow/certs
 unittest: test-undertow-transport
 .PHONY: test-undertow-transport
+# 11/09/26 (the desktop applications, track chat, the review): ut_transport_read_now(), the read wchat's helper makes
+# after poll(), on the transport test's own simulated network and TLS server (that file included whole)
+$(BUILD)/host/test_wchat_transport: tests/host/test_wchat_transport.c tests/host/test_undertow_transport.c \
+                                   $(UT_TRANSPORT_OBJ) $(MBEDTLS_HOST_LIB)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $(MBEDTLS_HOST_CONF) -I$(MBEDTLS_DIR)/library tests/host/test_wchat_transport.c \
+		$(filter %.o %.a,$^) -o $@
+unittest-chat-transport: $(BUILD)/host/test_wchat_transport
+	$(BUILD)/host/test_wchat_transport tests/host/undertow/certs
+unittest: unittest-chat-transport
+.PHONY: unittest-chat-transport
 
 # tools/fetch-webdeps.py against local archives made by the test (nothing is downloaded), then the real thing
 # checked: every extracted Mbed TLS file as it came from the archive, and rootfs/etc/ssl/cert.pem as pinned
