@@ -370,6 +370,32 @@ gk_next()'s drain holding; the code's origin clean. One fix round followed, each
   boot-timing step, it passed; this track changes nothing in the kernel); the guiapps scenario passed at -O0 and -O2,
   67 of 67 checks, 61 of them wkit's. Natively, ASan and UBSan (undefined behaviour fatal) found nothing.
 
+- **The re-review** of 3e1551f3 found no critical or high finding and every F-item holding; one more small round
+  (four commits, 31f5864d..9dcd814d):
+  - N1 (decided): movement keys repeat and activation keys act once a press, the rule in gk.h: a radio group's and
+    tabs' arrows, Home and End move at each repeat again, as lists and sliders do (Settings' held arrow gives its
+    five applies); Space and Enter, boxes and shortcuts but GK_ITEM_REPEAT's act once.
+  - N2 (decided): a watch stays level-triggered until gk_unwatch() or a close, and ends by itself only on POLLNVAL:
+    SurfOS's pipes and sockets say POLLIN|POLLHUP while data is left and at the end alike, so F9's watch told once
+    stranded what a program had not read in one go. At most one GK_EV_FD a watch waits, its revents merged (x: the
+    descriptor); gk.h says to unwatch at read() == 0 or an error, as Chat's end_link() does.
+  - N3: gk_timer_stop() takes the timer's events not given yet with it. N4: after a deletion the cursor stands on a
+    character's start. N5: gk_set_text()'s result is the call's own, and -1 for a tab strip's and a list's text,
+    which is their tab's and row's. N6: gk.h states F14. N7: a wheel's rows in 64 bits in areas, lists and texts.
+  - N8: the fake desktop says on stderr when it loses events (the first loss in a run, and the run's count at its
+    end), gkf_flood() for tests that flood on purpose, gkf_lost() to count; what it keeps is unchanged.
+  - Checked: `make unittest` (test_gk 536, test_wkit 76, test_gksecret 10) and the guiapps scenario at -O0 and -O2
+    through the lock (test-all skipped, as the coordinator decided: no kernel change, and the integration gate runs
+    it); natively ASan and UBSan with undefined behaviour fatal, and the i386 compile with no libgcc division. The
+    nine apps' window tests of 582153be, built in this track's scratchpad from git objects with this kit's files laid
+    over (review-kit's build_apps.sh, copied): Spreadsheet 169, Chat 290, Mines 77, Solitaire 82, Swell 63,
+    Settings 173, wkit 76, Code Editor 108 checks, all passing; Paint 162 checks, 8 failing on the Mac's 49-character
+    TMPDIR (its test types a path and Enter without reading, and the fake, as the kernel, loses what passes 64
+    events; it now says so: 9 lost) and all passing with TMPDIR=/tmp. Paint's test is the integrator's to change at
+    the merge.
+  - The gates on 9dcd814d: unittest passed (test_gk 536, test_wkit 76, test_gksecret 10); the guiapps scenario
+    passed at -O0 and -O2, 67 of 67 checks, 61 of them wkit's.
+
 ## A test run that ran away
 
 On 11/05 an early stage-1 run of test_gk (scratchpad/apps-kit/native/test_gk), started without a time limit, did not
