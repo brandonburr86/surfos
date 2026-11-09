@@ -621,6 +621,22 @@ int main(void) {
     gkf_key(WIN_KEY_RIGHT, 0);                  /* Don't save */
     gkf_key('\r', 0);
     CHECK(run() == 0);
+    /* saved whole as a .sheet, then as CSV with nothing changed between: a file holds all of it, Ctrl+W closes */
+    fresh(NULL);
+    gkf_type("2\n=A1*3\n");
+    run();
+    ctrl('S', WIN_MOD_SHIFT);
+    run();
+    gkf_dialog_answer("/stick/x.sheet");
+    CHECK(run() && status_is("Saved x.sheet"));
+    ctrl('S', WIN_MOD_SHIFT);
+    run();
+    gkf_dialog_answer("/stick/x.csv");
+    CHECK(run() && box_is(BOX_CSV));
+    gkf_key('\r', 0);
+    CHECK(run() && !strcmp(file_text("/stick/x.csv"), "2\r\n6\r\n") && !A.lossy);
+    ctrl('W', 0);
+    CHECK(run() == 0);
     /* the close button over the CSV question: its own question takes its place and goes on */
     fresh(NULL);
     gkf_type("=1+1\n");

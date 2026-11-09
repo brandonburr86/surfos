@@ -74,7 +74,9 @@ struct app {
     char rd_path[WIN_PATH_MAX];
     char save_path[WIN_PATH_MAX];       /* a Save as waiting for CSV's question */
     int after;                          /* AFTER_*: what a save or a question was for */
-    unsigned lossy;                     /* SH_LOSE_*: what the last save, a CSV's, left out of the file */
+    unsigned lossy;                     /* SH_LOSE_*: what the last save, a CSV's, left out of every file */
+    unsigned whole;                     /* the sheet's state (sh_state()) when a .sheet last held all of it, */
+    int whole_known;                    /* if one did since it was new or opened */
     int all;                            /* the whole grid is to be painted again */
     char msg[APP_MSG];                  /* the status bar's message, until the next change */
     char title[WIN_TITLE_MAX];          /* the window's title as last set */

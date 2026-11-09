@@ -724,8 +724,9 @@ formula bar above it and a status bar below. Apps > Programs and its tile start 
   its format and what the formula bar shows (`cell B4 fixed2 =SUM(B1:B3)`); it keeps everything. A
   `.csv` (RFC 4180) opens as values (a field that begins with `=` is text) and saves the values,
   asking first when formulas, formats or column widths would be lost; after such a save New, Open
-  and Close ask again, their Save as offering the whole sheet as a `.sheet`. A file that would pass
-  32 MB, which no reader opens, is not written. Saving replaces a file as Notepad does (a new file
+  and Close ask again (unless a `.sheet` was saved since the sheet last changed), their Save as
+  offering the whole sheet as a `.sheet`. A file that would pass 32 MB, which no reader opens, is
+  not written. Saving replaces a file as Notepad does (a new file
   beside it, renamed over). A file is read a piece at a time; Esc stops it. New, Open and Close
   ask first about unsaved changes.
 * **Limits.** 300,000 cells, 8,192 bytes a cell (the `'` that keeps a text text not counted),

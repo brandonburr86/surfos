@@ -25,7 +25,8 @@ fixed decimals, percent, more and fewer decimals) and the program's part of the 
 Open and Save as are the desktop's choosers; a file is read a piece at a time between the window's
 events, so the window answers meanwhile and Esc stops it. New, Open and Close ask first about
 unsaved changes; saving as CSV asks first when formulas, formats or column widths would be lost,
-and after such a save New, Open and Close ask again (11/09/26, the review).
+and after such a save New, Open and Close ask again, unless a .sheet was saved since the sheet last
+changed (11/09/26, the review).
 
 Copy puts the cells' values on the desktop's clipboard as tab-separated text, and keeps the cells
 themselves: a paste of what the clipboard still holds from this copy puts the cells back with their
@@ -526,6 +527,8 @@ static void read_done(struct app *a) {
     a->said.s = NULL;                           /* a new sheet may have the old one's address */
     a->editing = E_NONE;
     a->lossy = 0;
+    a->whole = sh_state(s);                     /* a .sheet opened holds all of it */
+    a->whole_known = sh_kind_of(a->rd_path) == SH_NATIVE;
     {
         struct view keep = a->v;
         view_init(&a->v, s);
@@ -589,7 +592,11 @@ static int write_to(struct app *a, const char *path) {
     }
     title_path(a, path);
     sh_saved(a->s);
-    a->lossy = kind == SH_CSV ? sh_csv_loss(a->s) : 0;     /* then New, Open and Close still ask */
+    if(kind == SH_NATIVE) {                     /* all of it in a file */
+        a->whole = sh_state(a->s);
+        a->whole_known = 1;
+    }
+    a->lossy = kind == SH_NATIVE || (a->whole_known && a->whole == sh_state(a->s)) ? 0 : sh_csv_loss(a->s);
     snprintf(line, sizeof(line), kind == SH_CSV ? "Saved the values in %s" : "Saved %s", base_name(path));
     say(a, line);
     return 0;
@@ -638,6 +645,7 @@ static void do_new(struct app *a) {
     a->said.s = NULL;
     a->editing = E_NONE;
     a->lossy = 0;
+    a->whole_known = 0;
     {
         struct view keep = a->v;
         view_init(&a->v, s);
@@ -682,7 +690,7 @@ static int csv_asks(struct app *a, const char *path) {
     lost_words(lose, what, sizeof(what));
     snprintf(line, sizeof(line), "In CSV, %s are lost:", what);
     gk_confirm(a->ui, BOX_CSV, "Save the values only?", line, lose & SH_LOSE_LIMIT ?
-               "cells saying #LIMIT! go as that. .sheet keeps all." : "they stay only in this window. .sheet keeps them.",
+               "cells saying #LIMIT! go as that. .sheet keeps all." : "the file holds the values only. .sheet keeps all.",
                "Save", NULL, "Cancel");
     return 1;
 }

@@ -58,8 +58,9 @@ FILES
     keeps everything: formulas, formats and column widths. A .csv is
     RFC 4180's comma-separated values, opened as values (a field that
     begins with = is text), and saved as values: saving one asks first
-    when formulas, formats or column widths would be lost, and New,
-    Open and Close ask again after such a save.
+    when formulas, formats or column widths would be lost, and after
+    such a save New, Open and Close ask again, unless the sheet was
+    saved as a .sheet since it last changed.
 
 LIMITS
     300,000 cells, 8,192 bytes a cell (the ' that keeps a text text
