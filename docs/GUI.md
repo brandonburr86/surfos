@@ -697,8 +697,9 @@ formula bar above it and a status bar below. Apps > Programs and its tile start 
   ranges (`A1:B5`), the operators `+ - * / ^ % &` and `= <> < <= > >=`, and SUM, AVERAGE, MIN,
   MAX, COUNT, COUNTA, IF, AND, OR, NOT, ROUND, INT, ABS, SQRT, POWER, MOD, LEN, LEFT, RIGHT, MID,
   UPPER, LOWER, TRIM and CONCAT, as OpenFormula has them: `-2^2` is 4, `2^3^2` 64. A formula that
-  does not parse is kept as typed and shows #ERROR!, and the status bar says why and where (cells
-  moving leave it as typed too); an unknown name is #NAME?. Every change works the formulas out again, each after the cells it
+  does not parse is kept as typed and shows #ERROR!, and the status bar says why and where (when
+  cells move its references move too, unless its text does not even split into references and words,
+  a stray `?`: then it stays as typed); an unknown name is #NAME?. Every change works the formulas out again, each after the cells it
   uses, and the formulas of a cycle show #CYCLE!.
 * **Numbers** are doubles shown to their 15 significant digits, so `=0.1+0.2` shows 0.3 and equals
   0.3; what a format or ROUND cuts is cut a half away from zero (2.675 with two decimals: 2.68).

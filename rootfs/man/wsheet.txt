@@ -18,8 +18,10 @@ DESCRIPTION
     LEFT, RIGHT, MID, UPPER, LOWER, TRIM and CONCAT. -2^2 is 4 and
     2^3^2 is 64, as in other spreadsheets. A number shows its 15
     significant digits: =0.1+0.2 is 0.3. A formula that does not parse
-    is kept as typed and shows #ERROR!; the status bar says why. It is
-    kept as typed when cells move too: its references are not changed.
+    is kept as typed and shows #ERROR!; the status bar says why. When
+    cells move, its references move as any formula's do, unless its
+    text does not even split into references and words (a stray ?):
+    then it stays exactly as typed.
 
     A copied formula's references move with it ($ keeps a part where
     it is), and inserting or deleting rows and columns keeps every
