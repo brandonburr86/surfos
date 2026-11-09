@@ -19,6 +19,8 @@ The account of track code of `docs/superpowers/plans/2026-11-05-desktop-apps.md`
 
 - **The review's fix round: done** (11/09/26): every finding fixed and tested (under "The review"), kit's aac42b11
   merged (its chooser check), the gates passed.
+- **The second review's round: done** (11/09/26): its three findings and lows fixed and tested (under "The second
+  review").
 
 Nothing of it has run on the laptop; it has run under QEMU only.
 
@@ -215,9 +217,9 @@ one to the front.
 
 | Test | What | Checks |
 |---|---|---|
-| `test_wcode` | everything but `fileio.c`, `window.c` and `main.c`: random edits against a plain array, the history round trip, the colouring's states against a from-scratch tokenizing after random edits, hostile bytes in every tokenizer, the commands, the guard, the keys as desk's ABI sends them (the bits, repeats), the pointer; the review's findings (`review()`) | 527,441 (60 rounds, as `make unittest` runs it); 529,375 with marks every 3 lines |
+| `test_wcode` | everything but `fileio.c`, `window.c` and `main.c`: random edits against a plain array, the history round trip, the colouring's states against a from-scratch tokenizing after random edits, hostile bytes in every tokenizer, the commands, the guard, the keys as desk's ABI sends them (the bits, repeats), the pointer; the reviews' findings (`review()`, `review2()`) | 527,465 (60 rounds, as `make unittest` runs it); 529,399 with marks every 3 lines |
 | `test_wcode_save` | `fileio.c` on `tests/host/sim_fs.c`: every write, fsync and rename failure, half-done renames, twins, Save as, reading, the rescue copy; two windows of one file, a device by another name, lone CRs (every comparison by bytes and count) | 69 |
-| `test_wcode_win` | the window on the toolkit's fake desktop (`tests/host/gk_fake.c`), files in memory: it opens (the tab, the numbers, the status bar); typing presents only the rows that change; Open through the chooser, colours; the menus in the bar (shortcuts, radio items, greyed ones); the find bar (Enter, Shift+Enter, Esc, F5); Go to line's box; the clipboard both ways; a click, a drag, a double click, the numbers; the wheel; a new size; find in files, its list, a line opened at its match; the guard on Close tab, on the close button (pressed again while it asks) and on Quit; a never-saved file named through the chooser; no choosers (a path typed); a busy desktop; a missing file; the theme; the gutter down to the area's foot; the colouring's catch-up after a jump, Esc stopping a search between its steps, the disk's question | 91 |
+| `test_wcode_win` | the window on the toolkit's fake desktop (`tests/host/gk_fake.c`), files in memory: it opens (the tab, the numbers, the status bar); typing presents only the rows that change; Open through the chooser, colours; the menus in the bar (shortcuts, radio items, greyed ones); the find bar (Enter, Shift+Enter, Esc, F5); Go to line's box; the clipboard both ways; a click, a drag, a double click, the numbers; the wheel; a new size; find in files, its list, a line opened at its match; the guard on Close tab, on the close button (pressed again while it asks) and on Quit; a never-saved file named through the chooser; no choosers (a path typed); a busy desktop; a missing file; the theme; the gutter down to the area's foot; the colouring's catch-up after a jump, Esc stopping a search between its steps, the disk's question; Replace all's question, the greyed fields, a step drawing the status bar only, the find bar's change stopping a search | 108 |
 | `test_wcode speed` | a 16 MB file and a 16 MB single line, timed (below) | 23 |
 | screen checks | `tools/gui_apps_code.py` in qemu-usb's guiapps scenario, on the real desktop (below) | 29 |
 
@@ -339,6 +341,39 @@ device by another name, lone CRs, and every comparison by bytes and count) and `
 Ctrl+End in 4 MB, Esc stopping a search between its steps, the disk's question in its box). To reach two failures
 that only a refused allocation brings, `undo.c` and `app.c` take a test's allocator when built with
 `WC_UNDO_REALLOC` and `WC_APP_MALLOC` (the Makefile's test_wcode and `mac-sanitize.sh` do).
+
+## The second review
+
+A review of the fix round (b13fb6c6..f32f9e70, 11/09/26) found every first-round finding fixed, and three new
+problems in the searches made to go on between events, each now fixed and tested (its probes, in its scratch
+folder, were run against this tree):
+
+- **Critical: the find bar edited while Replace all ran.** A step that ran out of budget kept the line's length but
+  not its buffer, so after a reallocation the next step wrote into a freed block; and the job read the find bar's
+  text, replacement and choices afresh at every step. Now `wc_find_prepare()` takes them when a search begins (`cwhat`,
+  `cwith`, `cicase`, `cword`, `cregex`, the pattern compiled from them) and the search uses nothing else; the line's
+  buffer is written back at every way out of a step, and a line is cut only once its new text is whole. The window
+  greys the find bar's fields while Replace all changes the file, and a change of them stops a search still going on.
+- **High: the work counter could go round** (32 bits on SurfOS) and every step then said "more" without searching.
+  A step's bound is compared as `work - limit`, as a signed number, so the count may go round; tested from a count
+  just short of its end, for Find, Replace all and find in files' line bound.
+- **High: long lines took minutes.** Each `regexec()` was charged the whole rest of its line, so a line of 1 MB took
+  one call a step, and each step redrew the window. A call is now charged what it read, to its match's end; a step
+  is also timed (40 ms, by `uptime()`: main.c gives the clock) for what the charge leaves out; between steps only the
+  status bar is drawn. Find previous `[0-9]+` on 1 MB of minified JSON: 5 ms (was more than 120 s); Replace all
+  `[0-9]+` to `N` on 40 lines of 160 KB: well under a second (was 149 s). And a Replace all too large to undo,
+  which Esc could not stop once its history was gone, is asked about once it is counted (how many, on how many
+  lines; Replace all or Cancel), before anything changes (`wc_undo_fits()` reckons the history as `undo.c` keeps it).
+- **Lows.** Whole words with a regular expression are now one pass: the pattern is wrapped as `\<( )\>`, its
+  back-references and the replacement's groups one on, `\9` refused (the engine takes words as ASCII letters, digits
+  and `_`). One `regexec()` with large counts on a line of megabytes (`.{1000}x`) can still take seconds: no cheap
+  bound, so the manual says so. The 8 KB a tokenizer reads steer auto-indent and the closing bracket's indentation on
+  and after a longer line: the manual says so too.
+
+Tests: `test_wcode`'s `review2()` (the snapshot with the find bar changed in the middle of Replace all, plain and with
+groups; the count near its end; Find previous and Replace all on long lines in steps, timed, with the question;
+whole words in one pass, groups, `\9`), and in `test_wcode_win` the question in its box, the greyed fields, a step
+that draws the status bar only, and a find bar's change stopping a search.
 
 ## Where the code comes from
 
