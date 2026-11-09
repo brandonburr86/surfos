@@ -3924,6 +3924,15 @@ static void test_net(void) {
 
 static volatile int raw_was_set;
 
+/* 11/05/26 (the review of stage 2): a task that is not the owner of a terminal in TTY_RAW_KEYS (a program the desktop
+   started, on its console) may not take raw mode, nor end it by ending */
+static volatile int raw_refused;
+
+static void try_raw_and_exit(void *arg) {
+    struct tty *t = (struct tty *)arg;
+    raw_refused = tty_ctl(t, TTY_RAW, 1) == -16 && tty_ctl(t, TTY_RAW, 0) == -16 && t->raw == TTY_RAW_KEYS;
+}
+
 static void set_raw_and_exit(void *arg) {     /* and never turns it off, nor the inverse or the cursor */
     struct tty *t = (struct tty *)arg;
     const char *s = "\033[7m\033[?25l";
@@ -4025,8 +4034,29 @@ static void test_tty(void) {
     n = tty_read(t, buf, sizeof(buf));
     check(n == 30 && !memcmp(buf, "\033[1;5D\033[5;2~\033[24;4~\033[1;7H\033[Z\033b", 30),
           "tty: raw mode sends modifiers as xterm does: Ctrl+Left, Shift+PgUp, Alt+Shift+F12, Ctrl+Alt+Home, Shift+Tab, Alt+b");
+    tty_key(t, LEFT, KEY_REPEAT); tty_key(t, 'r', KEY_REPEAT);   /* 11/05/26: a repeat is TTY_RAW_KEYS's alone */
+    n = tty_read(t, buf, sizeof(buf));
+    check(n == 4 && !memcmp(buf, "\033[Dr", 4), "tty: raw mode 1 sends a key the keyboard repeats as it was");
+    /* 11/05/26 (the desktop's keys): TTY_RAW_KEYS, every key with its modifiers exactly and its repeat */
+    check(tty_ctl(t, TTY_RAW, TTY_RAW_KEYS) == 0 && t->raw == TTY_RAW_KEYS, "tty: raw mode with keys (TTY_RAW_KEYS) on");
+    tty_key(t, 'a', 0); tty_key(t, '\t', 0); tty_key(t, 's', KEY_CTRL); tty_key(t, 'S', KEY_CTRL | KEY_SHIFT);
+    tty_key(t, '\t', KEY_CTRL); tty_key(t, '0', KEY_CTRL); tty_key(t, 0x1B, 0);
+    n = tty_read(t, buf, sizeof(buf));
+    check(n == 37 && !memcmp(buf, "a\t\033[115;5u\033[83;6u\033[9;5u\033[48;5u\033[27;1u", 37),
+          "tty: TTY_RAW_KEYS: a plain key its byte, Ctrl+S, Ctrl+Shift+S, Ctrl+Tab, Ctrl+0 and Esc as ESC[c;mu");
+    tty_key(t, UP, 0); tty_key(t, F5, KEY_REPEAT); tty_key(t, 'x', KEY_ALT | KEY_REPEAT); tty_key(t, '\r', KEY_SHIFT);
+    n = tty_read(t, buf, sizeof(buf));
+    check(n == 30 && !memcmp(buf, "\033[1;1A\033[15;17~\033[120;19u\033[13;2u", 30),
+          "tty: TTY_RAW_KEYS: the special keys always with m, a repeat's 16 in m, Alt+X, Shift+Enter");
+    raw_refused = 0;
+    k = kthread_create("rawkeys", try_raw_and_exit, t, PL_NORMAL, 0);
+    if(k) task_wait(k->pid, &status);
+    tty_key(t, 'k', KEY_CTRL);
+    n = tty_read(t, buf, sizeof(buf));
+    check(k && raw_refused && t->raw == TTY_RAW_KEYS && n == 8 && !memcmp(buf, "\033[107;5u", 8),
+          "tty: TTY_RAW_KEYS is its owner's: another task's TTY_RAW is EBUSY, its end changes nothing, keys still come");
     check(tty_ctl(t, TTY_RAW, 0) == 0 && !t->raw, "tty: raw mode off");
-    check(tty_ctl(t, TTY_RAW, 2) < 0 && tty_ctl(t, 99, 0) < 0, "tty: unknown requests are refused");
+    check(tty_ctl(t, TTY_RAW, 3) < 0 && tty_ctl(t, 99, 0) < 0, "tty: unknown requests are refused");
     raw_was_set = 0;
     k = kthread_create("rawexit", set_raw_and_exit, t, PL_NORMAL, 0);
     if(k) task_wait(k->pid, &status);

@@ -46,6 +46,13 @@ int gd_text_scaled(const struct gui_draw *d, int x, int y, const char *s, u32 c,
 int gd_name(const struct gui_draw *d, int x, int y, const char *s, int cells, u32 c);   /* UTF-8, cut with … */
 int gd_cells(const char *s);                                                    /* cells a UTF-8 name takes */
 u32 gd_char_len(const char *s, u32 avail);            /* the bytes of the character at s (UTF-8 as the console has it) */
+/* 11/05/26 (the review of stage 2): a name the desktop takes from a file (the registry's titles) checked by the rules
+   kernel/win.c checks a program's menus by: gd_text_cells(), its cells (their code page 437 indexes into cell[] when not
+   NULL, room for one a byte), or -1 for a string that is not whole UTF-8 by the console's rules (driver/cp437.c's
+   utf8_feed()) or has a control character (C0, DEL, C1); gd_reads_as(), whether those cells read as one of names
+   (lower case) in any case, blank cells around them not counted */
+int gd_text_cells(const char *s, u8 *cell);
+bool gd_reads_as(const u8 *cell, int n, const char *const *names, int count);
 u8 gd_char(const char *s, u32 avail, u32 *len);       /* its glyph, and its bytes */
 void gd_button(const struct gui_draw *d, int x, int y, int w, int h, const char *label, u32 bg, u32 fg);
 void gd_wave(const struct gui_draw *d, int x, int y, int w, int h, u32 c);

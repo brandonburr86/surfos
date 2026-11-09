@@ -12,6 +12,12 @@ waits: win_update() lends the window's pixels until the next update or close, so
 them without a call.
 10/25/26 (stage C6): run, the launcher (Apps > Run program...).
 10/26/26 (stage C12): win_clip, the text a program's window put on the clipboard.
+11/05/26 (the desktop applications, track desk): the menus, the clipboard, the choosers and the theme
+(kernel/win.c's desktop side); run_file, a program of /initrd/bin with one argument, as Files opens a
+file in the program the registry names for it; note, a line for the kernel log; and the desktop's
+preferences, read from and written to the settings on the stick (kernel/netman.c, net/netcfg.c's
+desktop.theme and pointer.speed). A preference is written as the settings command writes it, so
+the desktop waits for the stick meanwhile, as it does for Files' Mount and Eject.
 */
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +28,7 @@ them without a call.
 #include <surfos/klog.h>
 #include <surfos/win.h>
 #include <fs/vfs.h>
+#include <net/netman.h>
 #include "guisys.h"
 
 #define RUN_LINE 128                    /* a command line the launcher takes */
@@ -90,4 +97,89 @@ int guisys_win_run(void *ctx, const char *line, char *msg, size_t n) {
     snprintf(note, sizeof(note), "gui: started %s (pid %d)\n", argv[0], pid);
     klog_write(note);
     return pid;
+}
+
+/**** 11/05/26 (track desk) ****/
+
+int guisys_win_paste(void *ctx, const char *text, u32 len) {
+    (void)ctx;
+    return win_paste_give(text, len);
+}
+
+int guisys_win_dialog(void *ctx, int h, struct win_dialog *out, u32 *no) {
+    (void)ctx;
+    return win_dialog_take(h, out, no);
+}
+
+int guisys_win_answer(void *ctx, int h, u32 no, const char *path) {
+    (void)ctx;
+    return win_dialog_answer(h, no, path);
+}
+
+int guisys_win_theme(void *ctx, int theme, const u32 *colors) {
+    (void)ctx;
+    return theme < 0 ? -EINVAL : win_theme_set((u32)theme, colors);
+}
+
+/* Files' Open: /initrd/bin/<program> with arg as its one argument (a path, spaces and all), started as the launcher
+   starts a line (the desktop's console, /dev/null for its input, detached): its pid, or -errno with why in msg */
+int guisys_run_file(void *ctx, const char *program, const char *arg, char *msg, size_t n) {
+    char path[VFS_PATH_MAX], name[32], note[96], file[VFS_PATH_MAX], *argv[2];
+    struct file *files[3] = { NULL, NULL, NULL };
+    int pid, r;
+    (void)ctx;
+    if(!program[0] || strchr(program, '/') || strlen(program) >= sizeof(name) || strlen(arg) >= sizeof(file)) {
+        strlcpy(msg, "That is no program to start.", n);
+        return -EINVAL;
+    }
+    strlcpy(name, program, sizeof(name));
+    strlcpy(file, arg, sizeof(file));
+    snprintf(path, sizeof(path), "/initrd/bin/%s", name);
+    argv[0] = name;
+    argv[1] = file;
+    r = vfs_open("/dev/null", O_RDONLY, &files[0]);
+    if(r) {
+        snprintf(msg, n, "/dev/null: %s", strerror(r));
+        return r;
+    }
+    pid = process_spawn_files(path, file[0] ? 2 : 1, argv, curTask->con, TF_DETACHED, files);
+    vfs_close(files[0]);
+    if(pid < 0) {
+        snprintf(msg, n, "%s: %s", name, strerror(pid));
+        return pid;
+    }
+    snprintf(note, sizeof(note), "gui: started %s (pid %d) with a file\n", name, pid);
+    klog_write(note);
+    return pid;
+}
+
+/* a line for the kernel log, whole: a text too long is cut, never its newline (11/05/26, the review of stage 2) */
+void guisys_note(void *ctx, const char *line) {
+    char text[160];
+    size_t n;
+    (void)ctx;
+    n = strlcpy(text, line, sizeof(text) - 1);
+    if(n > sizeof(text) - 2) n = sizeof(text) - 2;
+    text[n] = '\n';
+    text[n + 1] = 0;
+    klog_write(text);
+}
+
+int guisys_prefs(void *ctx, int *theme, int *speed) {
+    struct netcfg_settings s;
+    (void)ctx;
+    netman_settings(&s);
+    *theme = s.theme == NETCFG_THEME_DUSK ? 1 : 0;
+    *speed = s.pointer >= 1 && s.pointer <= 3 ? s.pointer : 1;
+    return 0;
+}
+
+int guisys_pref_set(void *ctx, int which, int value, char *msg, size_t n) {
+    static const char *const speeds[] = { "slow", "normal", "fast" };
+    (void)ctx;
+    msg[0] = 0;
+    if(which == 0) return netman_set(NETCFG_THEME, value ? "dusk" : "ocean", msg, n);
+    if(which == 1 && value >= 1 && value <= 3) return netman_set(NETCFG_POINTER, speeds[value - 1], msg, n);
+    strlcpy(msg, "no such preference", n);
+    return -1;
 }

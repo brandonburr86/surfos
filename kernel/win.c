@@ -61,14 +61,33 @@ ends at a NUL, and empty text is refused. WIN_ALERT counts in the window's state
 11/05/26 (docs/superpowers/plans/2026-11-05-desktop-apps.md, track desk, stage 1: the ABI): WIN_THEME,
 the desktop's theme and its colours (until a desktop gives its own, the ocean theme's below); and
 the argument checks of WIN_MENU, WIN_PASTE, WIN_DIALOG and WIN_TAKE (surfos/win.h), each made on a
-copy in the kernel's memory, never on the program's, which may change meanwhile. Until stage 2
-implements them, a request that passes its checks is answered -ENOSYS.
+copy in the kernel's memory, never on the program's, which may change meanwhile.
 11/05/26 (the review of the ABI): a menu's labels and shortcuts are UTF-8 by the console's own
 rules (driver/cp437.c's utf8_feed(), as the desktop draws them) with no control character, and the
 bar's cells are counted as the desktop draws them; no title passes for the desktop's own; menus of
 14 entries at most, submenus one level deep and one Help merged with the desktop's; a chooser's
 flags and types as surfos/win.h's win_types() takes them (16 types, whole names after '='); the
 theme says how many of its slots it filled.
+
+11/05/26 (stage 2): the ops themselves, and their desktop's side. A window's menus are the kernel's
+copy of its last WIN_MENU (struct menus, held by a count), lent to the desktop as its pixels are:
+win_update() gives the desktop the copy in force, which stays its until its next update or close,
+so that nothing is copied with interrupts off. The clipboard is the desktop's (shell/gui.c's
+state): the desktop gives this file a copy of it (win_paste_give()) while one of its windows has
+the focus and the text changed. A window's WIN_CLIP that its desktop has not taken yet is newer:
+that window's paste gets it, and the desktop's taking it (win_clip_take()) makes it the copy in
+the same section, so that a paste never gets text older than the last copy. WIN_PASTE copies
+during the program's call, holding the text by a count (struct paste), so that a new copy given
+meanwhile frees the old one only after the call. A chooser asked for (WIN_DIALOG,
+only after a key, a press or a menu's item came to the window since its last request) waits in
+the window (ask) until the desktop takes it (win_dialog_take(), which numbers it) and answers it
+by that number (win_dialog_answer()): the path chosen waits in the window (answer) for WIN_TAKE,
+and the answer's WIN_EV_DIALOG, whose place in the queue is kept while the request waits, is
+queued in the same section as the path is set. A desktop that lets the window go answers 0 for a
+request that waits; a path chosen stays for WIN_TAKE until the program lets go. The theme is the
+desktop's (win_theme_set()), kept in each window too, so that WIN_THEME says the last one after
+the hang-up; a window that asked WIN_THEME gets WIN_EV_THEME at each change. The menus and a
+request go when either side lets the window go: neither can use them after.
 */
 
 #include <surfos/types.h>
@@ -90,6 +109,11 @@ theme says how many of its slots it filled.
 #define USER_PAGE 4096
 
 struct winbuf { u32 *px; int w, h; u_int refs; };
+/* 11/05/26: text for WIN_PASTE, held by a count while a paste copies from it: the clipboard as the desktop gave it
+   last, or a window's WIN_CLIP its desktop has not taken yet */
+struct paste { u_int refs; u32 len; char text[]; };
+/* 11/05/26: a window's menus (WIN_MENU), held by a count: the window's own, and the copy lent to its desktop */
+struct menus { u_int refs; u32 count; struct win_menu_item it[]; };
 
 struct desk {
     bool used;
@@ -98,9 +122,11 @@ struct desk {
     struct tty *ptys[DESK_PTYS];        /* its Terminal's */
     u_long shells[DESK_PTYS];           /* 10/25/26: the session shell on each (the Terminal's surfsh), 0: unknown */
     struct win_desk info;
-    char *clip;                         /* 10/26/26: text a window put on the clipboard, for the desktop to take */
-    u32 clip_len;
+    struct paste *clip;                 /* 10/26/26: text a window put on the clipboard, for the desktop to take */
     int clip_from;                      /* and the handle of that window */
+    struct paste *paste;                /* 11/05/26: the desktop's clipboard, for WIN_PASTE; NULL: empty */
+    bool themed;                        /* 11/05/26: the desktop said its theme: */
+    u32 theme, colors[WIN_COLORS];
 };
 
 struct win {
@@ -118,6 +144,15 @@ struct win {
     u32 flags, background, serial, presents;
     u32 alerts;                         /* 10/26/26: how many times it asked to be seen (WIN_ALERT) */
     bool themed;                        /* 11/05/26: its program asked WIN_THEME: it hears of a new theme */
+    u32 theme, colors[WIN_COLORS];      /* 11/05/26: the theme it has, its desktop's (the last after the hang-up) */
+    struct menus *menu;                 /* 11/05/26: its menus (WIN_MENU), the kernel's copy; NULL for none */
+    struct menus *menu_view;            /* those its desktop has, from its last update; NULL */
+    u32 menu_serial;                    /* how many times they were set */
+    struct win_dialog *ask;             /* 11/05/26: the chooser it asked for, until the desktop takes it; NULL */
+    bool asking;                        /* a request not answered yet: a place in the queue is kept for its answer */
+    bool input;                         /* a key, a press or a menu's item came to it since its last request */
+    u32 ask_id, ask_no;                 /* the request's id (WIN_EV_DIALOG's x), and its number (the answer names it) */
+    char *answer;                       /* the path the chooser chose, until WIN_TAKE or the program's end; NULL */
     bool focused;
     int size_w, size_h;                 /* its size: buf's, and still once the buffers went at the hang-up */
     char title[WIN_TITLE_MAX];
@@ -220,8 +255,18 @@ static int queue_event(struct win *w, const struct win_event *e) {
         last->mods = e->mods;
         return 0;
     }
-    if(w->ev_count == WIN_EVENTS) {
-        w->lost++;
+    if(e->type == WIN_EV_THEME) {                       /* 11/05/26 (the review of stage 2): one waits at most, */
+        u_int k;                                        /* the newest (the program asks the colours anyway) */
+        for(k = 0; k < w->ev_count; k++) {
+            struct win_event *q = &w->ev[(w->ev_first + k) % WIN_EVENTS];
+            if(q->type == WIN_EV_THEME) {
+                q->value = e->value;
+                return 0;
+            }
+        }
+    }
+    if(w->ev_count >= WIN_EVENTS - (w->asking && e->type != WIN_EV_DIALOG ? 1 : 0)) {
+        w->lost++;                                      /* 11/05/26: the last place is a request's answer's */
         return -EAGAIN;
     }
     w->ev[(w->ev_first + w->ev_count++) % WIN_EVENTS] = *e;
@@ -288,12 +333,55 @@ static struct win *held_win(int h) {
     return w->used && w->held && w->desk == d && w->gen == (u_short)(h / WIN_MAX) ? w : NULL;
 }
 
+/* what goes when a window's side lets go, to be freed with interrupts on: its buffers, and (11/05/26) its menus, a
+   request the desktop never took, a path never taken */
+struct dead { struct winbuf *buf[2]; struct menus *menus[2]; void *mem[2]; };
+
+/* 11/05/26: a holder of text for WIN_PASTE lets go (interrupts off): p itself when that was the last, to free with
+   them on */
+static struct paste *paste_put(struct paste *p) {
+    return p && --p->refs == 0 ? p : NULL;
+}
+
+/* 11/05/26: a holder of menus lets go (interrupts off): m itself when that was the last, to free with them on */
+static struct menus *menus_put(struct menus *m) {
+    return m && --m->refs == 0 ? m : NULL;
+}
+
+static void dead_free(struct dead *d) {
+    int i;
+    for(i = 0; i < 2; i++) {
+        buf_free(d->buf[i]);
+        kfree(d->menus[i]);
+        kfree(d->mem[i]);
+    }
+}
+
+/* 11/05/26: the request that waits answered, WIN_EV_DIALOG (value: 1 a path was chosen, 0 cancelled) in the place
+   kept for it (interrupts off) */
+static void answer_queue(struct win *w, unsigned value) {
+    struct win_event e;
+    memset(&e, 0, sizeof(e));
+    e.type = WIN_EV_DIALOG;
+    e.value = value;
+    e.x = (int)w->ask_id;
+    w->asking = false;
+    if(queue_event(w, &e) >= 0) wake_up_all(&w->readers);
+}
+
 /* the window let go of by its desktop (interrupts off): hung up, and its pixels go (10/25/26: a program that holds on
-   to it keeps no memory with it; its size stays); free when its program let go too. The buffers to free are put in
-   dead[0] and dead[1] */
-static void hang_up(struct win *w, struct winbuf **dead) {
-    dead[0] = buf_put(w->view);
-    dead[1] = buf_put(w->buf);
+   to it keeps no memory with it; its size stays); free when its program let go too. What to free goes into dead.
+   11/05/26: its menus go, and a request: one that waits is answered (cancelled); a path chosen stays for WIN_TAKE */
+static void hang_up(struct win *w, struct dead *dead) {
+    dead->buf[0] = buf_put(w->view);
+    dead->buf[1] = buf_put(w->buf);
+    dead->menus[0] = menus_put(w->menu);
+    dead->menus[1] = menus_put(w->menu_view);
+    dead->mem[0] = w->ask;
+    w->menu = w->menu_view = NULL;
+    w->ask = NULL;
+    if(w->asking && w->prog) answer_queue(w, 0);
+    w->asking = false;
     w->view = w->buf = NULL;
     w->desk = NULL;
     w->held = false;
@@ -355,21 +443,30 @@ static int win_poll(struct vnode *v, struct file *f) {
    it ended at its next update */
 static void win_release(struct vnode *v) {
     struct win *w = (struct win *)v->priv;
-    struct winbuf *dead[2] = { NULL, NULL };
+    struct dead dead;
     u_long flags;
     if(!w) return;                                      /* a vnode that never had its window */
+    memset(&dead, 0, sizeof(dead));
     flags = irq_save();
     w->prog = false;
+    dead.menus[0] = menus_put(w->menu);                 /* 11/05/26: nobody sets them again (its desktop keeps */
+    dead.mem[0] = w->ask;                               /* the copy it has until its next update), nor asks, */
+    dead.mem[1] = w->answer;                            /* nor takes a path */
+    w->menu = NULL;
+    w->ask = NULL;
+    w->answer = NULL;
+    w->asking = false;
     if(!w->held) {
-        dead[0] = buf_put(w->buf);
-        dead[1] = buf_put(w->view);
+        dead.buf[0] = buf_put(w->buf);
+        dead.buf[1] = buf_put(w->view);
+        dead.menus[1] = menus_put(w->menu_view);
+        w->menu_view = NULL;
         w->buf = w->view = NULL;
         w->desk = NULL;
         w->used = false;
     }
     irq_restore(flags);
-    buf_free(dead[0]);
-    buf_free(dead[1]);
+    dead_free(&dead);
     poll_wake();
 }
 
@@ -460,6 +557,8 @@ int sys_winopen(const struct win_open *uo) {
         w->flags = o.flags;
         w->background = o.background;
         title_set(w->title, o.title, (u32)strnlen(o.title, WIN_TITLE_MAX));
+        w->theme = d->themed ? d->theme : WIN_THEME_OCEAN;     /* 11/05/26 */
+        memcpy(w->colors, d->themed ? d->colors : ocean_colors, sizeof(w->colors));
         v->priv = w;
     }
     irq_restore(flags);
@@ -617,10 +716,10 @@ static int theme(struct win *w, struct win_theme *u) {
     u_long flags;
     if(!u || !user_buf(u, sizeof(k), true)) return -EFAULT;
     memset(&k, 0, sizeof(k));
-    k.theme = WIN_THEME_OCEAN;
     k.count = WIN_COLORS;
-    memcpy(k.colors, ocean_colors, sizeof(ocean_colors));
     flags = irq_save();
+    k.theme = w->theme;
+    memcpy(k.colors, w->colors, sizeof(w->colors));
     w->themed = true;
     irq_restore(flags);
     memcpy(u, &k, sizeof(k));
@@ -639,7 +738,7 @@ static int clip_may(const struct win *w) {
    the copy (nothing is copied for a refusal) and again after it. Text: empty, or a NUL first, it is refused */
 static int set_clip(struct win *w, const struct win_clip *uc) {
     struct win_clip c;
-    char *text, *old = NULL;
+    struct paste *text, *old = NULL;
     u_long flags;
     int r;
     if(!uc || !user_buf(uc, sizeof(c), false)) return -EFAULT;
@@ -650,17 +749,17 @@ static int set_clip(struct win *w, const struct win_clip *uc) {
     r = clip_may(w);
     irq_restore(flags);
     if(r) return r;
-    text = (char *)kalloc(c.len);
+    text = (struct paste *)kalloc(sizeof(*text) + c.len);  /* 11/05/26: held by a count, as WIN_PASTE reads it */
     if(!text) return -ENOMEM;
-    memcpy(text, c.text, c.len);
-    c.len = (unsigned)strnlen(text, c.len);             /* text only: to a NUL that comes first */
-    if(!c.len) { kfree(text); return -EINVAL; }
+    memcpy(text->text, c.text, c.len);
+    text->refs = 1;
+    text->len = (u32)strnlen(text->text, c.len);        /* text only: to a NUL that comes first */
+    if(!text->len) { kfree(text); return -EINVAL; }
     flags = irq_save();
     r = clip_may(w);                                    /* the focus may have gone meanwhile */
     if(!r) {
-        old = w->desk->clip;
+        old = paste_put(w->desk->clip);
         w->desk->clip = text;
-        w->desk->clip_len = c.len;
         w->desk->clip_from = handle_of(w);
         text = NULL;
     }
@@ -731,32 +830,45 @@ static int menu_cells(const char *s, u8 *cell) {
     return d.have ? -1 : cells;
 }
 
-/* a title that would pass for one of the desktop's own menus, by the cells it draws (n of them): ≋ in it (code page
-   437's 0xF7, which U+224B and U+2248 both draw), or SurfOS, Apps, Window or Help in any case with blank cells
-   around it (help: a title merged into the desktop's Help, which may be called that) */
-static bool desk_title(const u8 *cell, u32 n, bool help) {
-    static const char *const own[] = { "surfos", "apps", "window", "help" };
+/* the cells drawn (n of them) read as one of names (lower case), in any case, with blank cells around them (0xFF:
+   the no-break space) */
+static bool reads_as(const u8 *cell, u32 n, const char *const *names, u32 count) {
     u32 i, k;
-    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return true;
-    while(n && (cell[0] == ' ' || cell[0] == 0xFF)) cell++, n--;      /* 0xFF: the no-break space */
+    while(n && (cell[0] == ' ' || cell[0] == 0xFF)) cell++, n--;
     while(n && (cell[n - 1] == ' ' || cell[n - 1] == 0xFF)) n--;
-    for(i = 0; i < sizeof(own) / sizeof(own[0]); i++) {
-        if(help && i == 3) continue;
-        for(k = 0; k < n && own[i][k] && (cell[k] | 0x20) == own[i][k]; k++) ;
-        if(k == n && !own[i][k]) return true;
+    for(i = 0; i < count; i++) {
+        for(k = 0; k < n && names[i][k] && (cell[k] | 0x20) == names[i][k]; k++) ;
+        if(k == n && !names[i][k]) return true;
     }
     return false;
+}
+
+/* a title that would pass for one of the desktop's own menus, by the cells it draws: ≋ in it (code page 437's 0xF7,
+   which U+224B and U+2248 both draw), or SurfOS, Apps, Window or Help (help: a title merged into the desktop's Help,
+   which may be called that) */
+static bool desk_title(const u8 *cell, u32 n, bool help) {
+    static const char *const own[] = { "surfos", "apps", "window", "help" };
+    u32 i;
+    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return true;
+    return reads_as(cell, n, own, help ? 3 : 4);
+}
+
+/* 11/05/26 (the review of stage 2): an item of a Help menu that would pass for one of the desktop's own Help items */
+static bool desk_help_item(const u8 *cell, u32 n) {
+    static const char *const own[] = { "keyboard and mouse", "about surfos" };
+    return reads_as(cell, n, own, 2);
 }
 
 /* n entries of a WIN_MENU, copied into the kernel, as menus (surfos/win.h): each label and shortcut made a string,
    then the rest checked: 0, or -EINVAL. 11/05/26 (the review): labels and shortcuts the desktop draws as they are;
    14 entries a menu and a submenu; submenus one level deep, of an item, right after it; one Help title, not in the
-   bar, so not counted in its cells */
+   bar, so not counted in its cells, and (the review of stage 2) none of its items reads as the desktop's own */
 static int menu_check(struct win_menu_item *it, u32 n) {
     const u32 known = WIN_MENU_TITLE | WIN_MENU_SEPARATOR | WIN_MENU_DISABLED | WIN_MENU_CHECKED | WIN_MENU_RADIO |
                       WIN_MENU_SUBMENU | WIN_MENU_CHILD | WIN_MENU_HELP;
     u32 i, menus = 0, items = 0, children = 0, cells = 0, helps = 0, most = WIN_MENU_ITEMS;
     bool sub = false;                                   /* the entry before was a SUBMENU item or one of its children */
+    bool help = false;                                  /* the menu is the Help one */
     u8 cell[WIN_MENU_LABEL];
     int c;
     for(i = 0; i < n; i++) {
@@ -775,8 +887,11 @@ static int menu_check(struct win_menu_item *it, u32 n) {
             if((f & WIN_MENU_HELP) && ++helps > 1) return -EINVAL;
             if(!(f & WIN_MENU_HELP)) cells += (u32)c + 3;   /* a Help title is not in the bar */
             most = f & WIN_MENU_HELP ? WIN_MENU_HELP_ITEMS : WIN_MENU_ITEMS;
+            help = (f & WIN_MENU_HELP) != 0;
             items = 0;
             sub = false;
+        } else if(help && !sep && desk_help_item(cell, (u32)c)) {
+            return -EINVAL;                             /* (an item or a child of the Help menu) */
         } else if(child) {
             if(!sub || ++children > WIN_MENU_ITEMS || (!sep && !c)) return -EINVAL;   /* after its item, 14 */
         } else {
@@ -790,27 +905,27 @@ static int menu_check(struct win_menu_item *it, u32 n) {
 }
 
 /* WIN_MENU: the request copied in and checked (*out: the kernel's copy of its entries, NULL for none: count 0) */
-static int menu_args(const struct win_menu *um, struct win_menu_item **out, u32 *count) {
+static int menu_args(const struct win_menu *um, struct menus **out) {
     struct win_menu m;
-    struct win_menu_item *it;
+    struct menus *k;
     int r;
     *out = NULL;
-    *count = 0;
     if(!um || !user_buf(um, sizeof(m), false)) return -EFAULT;
     memcpy(&m, um, sizeof(m));
     if(m.count > WIN_MENU_ENTRIES) return -EINVAL;
     if(!m.count) return 0;
-    if(!m.items || !user_buf(m.items, (u_long)m.count * sizeof(*it), false)) return -EFAULT;
-    it = (struct win_menu_item *)kalloc(m.count * sizeof(*it));
-    if(!it) return -ENOMEM;
-    memcpy(it, m.items, m.count * sizeof(*it));
-    r = menu_check(it, m.count);
+    if(!m.items || !user_buf(m.items, (u_long)m.count * sizeof(struct win_menu_item), false)) return -EFAULT;
+    k = (struct menus *)kalloc(sizeof(*k) + m.count * sizeof(struct win_menu_item));
+    if(!k) return -ENOMEM;
+    memcpy(k->it, m.items, m.count * sizeof(struct win_menu_item));
+    k->refs = 1;
+    k->count = m.count;
+    r = menu_check(k->it, m.count);
     if(r) {
-        kfree(it);
+        kfree(k);
         return r;
     }
-    *out = it;
-    *count = m.count;
+    *out = k;
     return 0;
 }
 
@@ -840,35 +955,118 @@ static int dialog_args(const struct win_dialog *ud, struct win_dialog *d) {
     return 0;
 }
 
-/* 11/05/26, stage 1: the ABI's checks; what passes them is answered once stage 2 implements the ops */
+/* 11/05/26: WIN_MENU: the window's menus replaced by the request's, which its desktop gets at its next update (the
+   copy it has goes then) */
 static int set_menu(struct win *w, const struct win_menu *um) {
-    struct win_menu_item *it;
-    u32 n;
-    int r = menu_args(um, &it, &n);
-    (void)w;
-    kfree(it);
-    return r ? r : -ENOSYS;
+    struct menus *m, *old = NULL;
+    u_long flags;
+    int r = menu_args(um, &m);
+    if(r) return r;
+    flags = irq_save();
+    if(w->hung) r = -EPIPE;
+    else {
+        old = menus_put(w->menu);
+        w->menu = m;
+        w->menu_serial++;
+        m = NULL;
+    }
+    irq_restore(flags);
+    kfree(m);
+    kfree(old);
+    if(!r) poll_wake();                                 /* the desktop draws them */
+    return r;
 }
 
+/* 11/05/26: WIN_PASTE: the desktop's clipboard, from the copy it gave (held meanwhile), into the program's buffer;
+   only while the window has the focus. The window's own WIN_CLIP that its desktop has not taken yet is newer than
+   that copy (the desktop makes it the clipboard while the window keeps the focus): that one is pasted */
 static int paste(struct win *w, const struct win_buffer *ub) {
     struct win_buffer b;
+    struct paste *p = NULL, *dead;
+    u_long flags;
+    u32 n;
     int r = buffer_args(ub, &b);
-    (void)w;
-    return r ? r : -ENOSYS;
+    if(r) return r;
+    flags = irq_save();
+    r = clip_may(w);                                    /* -EPIPE once let go, -EACCES without the focus */
+    if(!r) {
+        p = w->desk->clip && w->desk->clip_from == handle_of(w) ? w->desk->clip : w->desk->paste;
+        if(p) p->refs++;
+    }
+    irq_restore(flags);
+    if(r) return r;
+    n = p ? p->len : 0;
+    if(b.size && n > b.size) r = -ENOSPC;
+    else if(b.size && !user_buf(b.buf, n + (b.size > n), true)) r = -EFAULT;
+    else if(b.size) {
+        if(n) memcpy(b.buf, p->text, n);
+        if(b.size > n) b.buf[n] = 0;
+    }
+    flags = irq_save();
+    dead = paste_put(p);
+    irq_restore(flags);
+    kfree(dead);
+    return r ? r : (int)n;
 }
 
+/* 11/05/26: WIN_DIALOG: the request kept for the desktop, which shows its chooser while the window has the focus
+   (only then may it ask: a chooser takes the keys), after something the user did in the window since its last request
+   (so that a program that asks again after each answer cannot hold the keys), and while its queue has a place for the
+   answer, which is kept for it from then on. 11/05/26 (the review of stage 2): not while a path chosen waits to be
+   taken (-EBUSY), so that WIN_TAKE always gives the path of the answer the program read last */
 static int ask_dialog(struct win *w, const struct win_dialog *ud) {
-    struct win_dialog d;
+    static u32 numbers;                                 /* the requests' numbers (interrupts off) */
+    struct win_dialog d, *copy;
+    u_long flags;
     int r = dialog_args(ud, &d);
-    (void)w;
-    return r ? r : -ENOSYS;
+    if(r) return r;
+    copy = (struct win_dialog *)kalloc(sizeof(*copy));
+    if(!copy) return -ENOMEM;
+    *copy = d;
+    flags = irq_save();
+    if(w->hung) r = -EPIPE;
+    else if(!w->focused) r = -EACCES;
+    else if(w->asking || w->answer) r = -EBUSY;          /* (the review of stage 2: a path chosen, not taken yet) */
+    else if(!w->input) r = -EACCES;
+    else if(w->ev_count >= WIN_EVENTS) r = -EAGAIN;    /* no place for the answer: the events first */
+    else {
+        w->ask = copy;
+        w->asking = true;
+        w->input = false;
+        w->ask_id = d.id;
+        if(!++numbers) numbers++;
+        w->ask_no = numbers;
+        copy = NULL;
+    }
+    irq_restore(flags);
+    kfree(copy);
+    if(!r) poll_wake();                                 /* the desktop shows it */
+    return r;
 }
 
+/* 11/05/26: WIN_TAKE: the path the chooser chose, into the program's buffer (checked first, as far as any path
+   reaches: a refusal keeps the path), and taken; after the hang-up too, as WIN_INFO works then */
 static int take(struct win *w, const struct win_buffer *ub) {
     struct win_buffer b;
+    char *a = NULL;
+    u_long flags;
+    u32 room, n = 0;
     int r = buffer_args(ub, &b);
-    (void)w;
-    return r ? r : -ENOSYS;
+    if(r) return r;
+    room = b.size < WIN_PATH_MAX ? b.size : WIN_PATH_MAX;
+    if(room && !user_buf(b.buf, room, true)) return -EFAULT;
+    flags = irq_save();
+    if(!w->answer) r = -ENOENT;
+    else if((n = (u32)strlen(w->answer)) + 1 > room) r = -ENOSPC;   /* it stays, for another try */
+    else {
+        a = w->answer;
+        w->answer = NULL;
+    }
+    irq_restore(flags);
+    if(r) return r;
+    memcpy(b.buf, a, n + 1);
+    kfree(a);
+    return (int)n;
 }
 
 int sys_winctl(int fd, int op, void *arg) {
@@ -898,22 +1096,24 @@ int sys_winctl(int fd, int op, void *arg) {
 /* the desktop's end (its descriptor's last close, or its task's reap): every window of it let go */
 static void desk_release(struct vnode *v) {
     struct desk *d = (struct desk *)v->priv;
-    struct winbuf *dead[2 * WIN_MAX];
-    char *clip;
+    struct dead dead[WIN_MAX];
+    struct paste *paste, *clip;
     u_long flags;
     int i, n = 0;
     if(!d) return;
+    memset(dead, 0, sizeof(dead));
     flags = irq_save();
     for(i = 0; i < WIN_MAX; i++) {
         if(!wins[i].used || wins[i].desk != d) continue;
-        hang_up(&wins[i], dead + n);
-        n += 2;
+        hang_up(&wins[i], &dead[n++]);
     }
-    clip = d->clip;                                     /* 10/26/26: text nobody took */
+    clip = paste_put(d->clip);                          /* 10/26/26: text nobody took (11/05/26: unless a paste */
+    paste = paste_put(d->paste);                        /* holds it), and the clipboard's copy */
     memset(d, 0, sizeof(*d));
     irq_restore(flags);
-    for(i = 0; i < n; i++) buf_free(dead[i]);
+    for(i = 0; i < n; i++) dead_free(&dead[i]);
     kfree(clip);
+    kfree(paste);
     poll_wake();
 }
 
@@ -1075,7 +1275,9 @@ static bool in_foreground(const struct win *w) {
 int win_update(int h, struct win_state *st, struct win_view *view) {
     struct win *w;
     struct winbuf *dead = NULL;
+    struct menus *gone = NULL;
     u_long flags = irq_save();
+    u_int k;
     int r = 0;
     w = held_win(h);
     if(!w) r = -EINVAL;
@@ -1094,17 +1296,30 @@ int win_update(int h, struct win_state *st, struct win_view *view) {
         st->pid = (int)w->owner;
         st->foreground = in_foreground(w);
         st->alerts = w->alerts;                         /* 10/26/26 */
+        st->menu_serial = w->menu_serial;               /* 11/05/26 */
+        st->dialog = w->ask != NULL;
+        st->close_waiting = 0;                          /* (the review of stage 2: the close button's rule) */
+        for(k = 0; k < w->ev_count; k++)
+            if(w->ev[(w->ev_first + k) % WIN_EVENTS].type == WIN_EV_CLOSE) st->close_waiting = 1;
         if(w->view != w->buf) {                         /* the desktop draws the new pixels from now on */
             dead = buf_put(w->view);
             w->view = w->buf;
             w->view->refs++;
         }
+        if(w->menu_view != w->menu) {                   /* 11/05/26: and has the menus in force */
+            gone = menus_put(w->menu_view);
+            w->menu_view = w->menu;
+            if(w->menu_view) w->menu_view->refs++;
+        }
         view->pixels = w->view->px;
         view->w = w->view->w;
         view->h = w->view->h;
+        view->menu = w->menu_view ? w->menu_view->it : NULL;
+        view->menus = w->menu_view ? (int)w->menu_view->count : 0;
     }
     irq_restore(flags);
     buf_free(dead);
+    kfree(gone);
     return r;
 }
 
@@ -1114,9 +1329,16 @@ int win_event(int h, const struct win_event *e) {
     int r = -EINVAL;
     w = held_win(h);
     if(w) {
+        u32 before = w->buttons;                        /* the buttons of the pointer event queued last */
         if(e->type == WIN_EV_FOCUS) w->focused = e->value != 0;
         r = queue_event(w, e);
         if(r >= 0) wake_up_all(&w->readers);
+        /* 11/05/26: the user did something there, so it may ask for a chooser: a key, an item chosen, or (the review
+           of stage 2) a press in it: a pointer event over its content with a button the one before did not have,
+           never one that says the pointer left (x, y -1) or a button held from a press elsewhere */
+        if(r >= 0 && (e->type == WIN_EV_KEY || e->type == WIN_EV_MENU ||
+                      (e->type == WIN_EV_POINTER && e->x >= 0 && e->y >= 0 && (e->value & ~before))))
+            w->input = true;
     }
     irq_restore(flags);
     if(r >= 0) poll_wake();
@@ -1125,13 +1347,14 @@ int win_event(int h, const struct win_event *e) {
 
 void win_close(int h) {
     struct win *w;
-    struct winbuf *dead[2] = { NULL, NULL };
-    u_long flags = irq_save();
+    struct dead dead;
+    u_long flags;
+    memset(&dead, 0, sizeof(dead));
+    flags = irq_save();
     w = held_win(h);
-    if(w) hang_up(w, dead);
+    if(w) hang_up(w, &dead);
     irq_restore(flags);
-    buf_free(dead[0]);
-    buf_free(dead[1]);
+    dead_free(&dead);
     if(w) poll_wake();
 }
 
@@ -1139,24 +1362,156 @@ void win_close(int h) {
    out when it came from window h, the one with the desktop's focus, dropped when it came from another */
 int win_clip_take(int h, char *out, u32 size) {
     struct desk *d;
-    char *text = NULL;
+    struct paste *text = NULL, *old = NULL;
     u32 len = 0;
     int from = -1;
     u_long flags = irq_save();
     d = own_desk();
     if(d) {
-        text = d->clip;
-        len = d->clip_len;
+        text = d->clip;                                 /* 11/05/26: the slot's count is the desktop's now */
         from = d->clip_from;
         d->clip = NULL;
-        d->clip_len = 0;
+        if(text && h >= 0 && from == h) {               /* the clipboard's from now: WIN_PASTE's too, at once */
+            old = paste_put(d->paste);
+            d->paste = text;
+            text->refs++;
+        }
     }
     irq_restore(flags);
+    kfree(old);
     if(!d) return -ENODEV;
     if(!text) return 0;
+    len = text->len;
     if(h < 0 || from != h) len = 0;                     /* set as its window lost the focus: not the clipboard's */
     if(len > size) len = size;
-    memcpy(out, text, len);
+    memcpy(out, text->text, len);
+    flags = irq_save();
+    text = paste_put(text);                             /* 11/05/26: unless a paste still copies from it */
+    irq_restore(flags);
     kfree(text);
     return (int)len;
+}
+
+/**** 11/05/26 (track desk, stage 2): the desktop's side of the menus, the clipboard, the choosers and the theme ****/
+
+/* the calling task's desktop's clipboard, len bytes of text (to a NUL if one comes first, at most WIN_CLIP_MAX; 0:
+   empty), copied for WIN_PASTE in place of the copy before (freed once no paste holds it): 0, -ENODEV for a task
+   without a desktop, -ENOMEM */
+int win_paste_give(const char *text, u32 len) {
+    struct paste *p = NULL, *old;
+    struct desk *d;
+    u_long flags;
+    if(len > WIN_CLIP_MAX) len = WIN_CLIP_MAX;
+    len = (u32)strnlen(text, len);
+    if(len) {
+        p = (struct paste *)kalloc(sizeof(*p) + len);
+        if(!p) return -ENOMEM;
+        p->refs = 1;
+        p->len = len;
+        memcpy(p->text, text, len);
+    }
+    flags = irq_save();
+    d = own_desk();
+    if(d) {
+        old = paste_put(d->paste);
+        d->paste = p;
+        p = old;
+    }
+    irq_restore(flags);
+    kfree(p);                                           /* the copy before, or this one when there is no desktop */
+    return d ? 0 : -ENODEV;
+}
+
+/* the chooser window h asked for (WIN_DIALOG), taken by its desktop into out, and its number into no, which its answer
+   names: 0; -ENOENT when none waits; -EINVAL for a handle that is not one of the calling task's desktop's. It waits
+   for its answer from then on */
+int win_dialog_take(int h, struct win_dialog *out, u32 *no) {
+    struct win_dialog *a = NULL;
+    struct win *w;
+    u_long flags = irq_save();
+    int r = 0;
+    w = held_win(h);
+    if(!w) r = -EINVAL;
+    else if(!w->ask) r = -ENOENT;
+    else {
+        a = w->ask;
+        w->ask = NULL;
+        *no = w->ask_no;
+    }
+    irq_restore(flags);
+    if(a) {
+        *out = *a;
+        kfree(a);
+    }
+    return r;
+}
+
+/* the answer to window h's request number no: path (absolute, shorter than WIN_PATH_MAX) when one was chosen, NULL
+   when it was cancelled; with it, in the same section, WIN_EV_DIALOG for its program, in the place kept for it. 0;
+   -EINVAL for a handle that is not one of the calling task's desktop's, a request that is not the one waiting (an
+   answer given already, or to one before), or a path that is none; -ENOMEM (the request is then answered as
+   cancelled) */
+int win_dialog_answer(int h, u32 no, const char *path) {
+    struct win_dialog *ask = NULL;
+    struct win *w;
+    char *copy = NULL, *old = NULL;
+    u_long flags;
+    u32 n = 0;
+    int r = 0;
+    if(path) {
+        n = (u32)strnlen(path, WIN_PATH_MAX);
+        if(n == WIN_PATH_MAX || path[0] != '/') return -EINVAL;
+        copy = (char *)kalloc(n + 1);
+        if(copy) memcpy(copy, path, n + 1);
+        else r = -ENOMEM;
+    }
+    flags = irq_save();
+    w = held_win(h);
+    if(!w || !w->asking || !w->prog || w->ask_no != no) {
+        if(!r) r = -EINVAL;
+    } else {
+        ask = w->ask;                                   /* never taken: answered as it is */
+        w->ask = NULL;
+        old = w->answer;
+        w->answer = copy;
+        copy = NULL;
+        answer_queue(w, w->answer ? 1 : 0);
+    }
+    irq_restore(flags);
+    kfree(ask);
+    kfree(old);
+    kfree(copy);
+    if(w) poll_wake();
+    return r;
+}
+
+/* the calling task's desktop's theme now: theme (WIN_THEME_*) and colors (WIN_COLORS of them), kept for its windows
+   to come and given to those it has; each that asked WIN_THEME gets WIN_EV_THEME. 0, -ENODEV for a task without a
+   desktop, -EINVAL for a theme that is none */
+int win_theme_set(u32 theme, const u32 *colors) {
+    struct win_event e;
+    struct desk *d;
+    u_long flags;
+    int i;
+    if(theme > WIN_THEME_DUSK) return -EINVAL;
+    memset(&e, 0, sizeof(e));
+    e.type = WIN_EV_THEME;
+    e.value = theme;
+    flags = irq_save();
+    d = own_desk();
+    if(d) {
+        d->themed = true;
+        d->theme = theme;
+        memcpy(d->colors, colors, sizeof(d->colors));
+        for(i = 0; i < WIN_MAX; i++) {
+            struct win *w = &wins[i];
+            if(!w->used || w->desk != d) continue;
+            w->theme = theme;
+            memcpy(w->colors, colors, sizeof(w->colors));
+            if(w->themed && w->prog && queue_event(w, &e) >= 0) wake_up_all(&w->readers);
+        }
+    }
+    irq_restore(flags);
+    if(d) poll_wake();
+    return d ? 0 : -ENODEV;
 }

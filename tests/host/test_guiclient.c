@@ -22,7 +22,18 @@
    while a button, a drag or a program's grab is held, and for GUI_GRACE_MS a press on it is nobody's; text from a
    window that no longer has the focus is dropped. An application that is a program now (the Clock): run from its
    tile, its window at the application's place, brought back when chosen again; Edit > Copy for a program's
-   window. */
+   window.
+   11/05/26 (the desktop applications, track desk): keys with their modifiers (and the desktop's own windows without
+   them), F5-F12, the pointer's modifiers; a program's menus in the bar in place of File and Edit, opened by Ctrl+G and
+   the arrows or the mouse, an item chosen as WIN_EV_MENU, greyed ones not, the bar back when the focus goes or the
+   menus do, 8 menus at 640x400 inside guard pixels; the clipboard given to the kernel before the FOCUS event, once a
+   change; choosers for a program (types listed, a Save as name given its type, Replace asked, a file taken care of
+   refused, Choose folder, a request without the focus or under another dialog cancelled, one replaced unanswered
+   cancelled, one whose window went closed); the theme told once and at each change. And with the review of the ABI:
+   full keys from the terminal's bytes and sequences to either side (Ctrl+Tab no Ctrl+I, Ctrl+0, the repeat, an Alt
+   key with no Esc before it but in the Terminal); submenus in their menu's place and a program's Help in the
+   desktop's; a full bar at 640x400; a chooser's title naming its window, answers by the request's number, and
+   "End the program?" in a chooser's place answering it. */
 #include "gui_fake.h"
 
 static struct gui_state g;
@@ -1117,6 +1128,665 @@ static void test_alert_clip(void) {
     CHECK(g.clip_len == 10 && !memcmp(g.clip, "from Asker", 10));
 }
 
+/**** 11/05/26 (track desk) ****/
+
+static struct win_menu_item entry(unsigned id, unsigned flags, const char *label, const char *keys) {
+    struct win_menu_item e;
+    memset(&e, 0, sizeof(e));
+    e.id = id;
+    e.flags = flags;
+    strlcpy(e.label, label, sizeof(e.label));
+    strlcpy(e.keys, keys, sizeof(e.keys));
+    return e;
+}
+
+/* how many key events of value window a got */
+static int count_value(int a, unsigned value) {
+    int i, n = 0;
+    for(i = 0; i < fake_wins[a].nev; i++) if(fake_wins[a].ev[i].type == WIN_EV_KEY && fake_wins[a].ev[i].value == value) n++;
+    return n;
+}
+
+/* a key's event sent to window a last: its value and its modifiers */
+static bool got(int a, unsigned value, unsigned mods) {
+    const struct win_event *e = last(a, WIN_EV_KEY);
+    return e && e->value == value && e->mods == mods;
+}
+
+/* 11/05/26 (the review): full keys (sys/gui.h) from the terminal's bytes and sequences, and as each side takes them */
+static void test_full_keys(void) {
+    int mods;
+    /* the terminal's bytes and sequences: tty.h's TTY_RAW_KEYS from the keyboard, xterm's from a serial terminal */
+    CHECK(gui_byte_key('a') == 'a' && gui_byte_key(9) == 9 && gui_byte_key(13) == 13 && gui_byte_key(127) == 127);
+    CHECK(gui_byte_key(19) == ('s' | GUI_KEY_CTRL) && gui_byte_key(0) == (' ' | GUI_KEY_CTRL) &&
+          gui_byte_key(28) == ('\\' | GUI_KEY_CTRL) && gui_byte_key(31) == ('_' | GUI_KEY_CTRL) &&
+          gui_byte_key(10) == ('j' | GUI_KEY_CTRL));
+    CHECK(gui_sequence_key(115, 'u', 5) == ('s' | GUI_KEY_CTRL));           /* ESC [ 115 ; 5 u: Ctrl+S */
+    CHECK(gui_sequence_key(83, 'u', 6) == ('S' | GUI_KEY_CTRL | GUI_KEY_SHIFT));
+    CHECK(gui_sequence_key(48, 'u', 5) == ('0' | GUI_KEY_CTRL));            /* Ctrl+0 */
+    CHECK(gui_sequence_key(9, 'u', 5) == (9 | GUI_KEY_CTRL) && gui_sequence_key(9, 'u', 2) == (9 | GUI_KEY_SHIFT));
+    CHECK(gui_sequence_key(27, 'u', 1) == 27 && gui_sequence_key(120, 'u', 3) == ('x' | GUI_KEY_ALT));
+    CHECK(gui_sequence_key(97, 'u', 17) == ('a' | GUI_KEY_REPEAT));         /* held down: the keyboard's repeat */
+    CHECK(gui_sequence_key(1, 'C', 1 + 16) == (GUI_RIGHT | GUI_KEY_REPEAT));
+    CHECK(gui_sequence_key(1, 'D', 6) == (GUI_LEFT | GUI_KEY_CTRL | GUI_KEY_SHIFT));
+    CHECK(gui_sequence_key(24, '~', 2) == (GUI_F(12) | GUI_KEY_SHIFT) && gui_sequence_key(15, '~', 0) == GUI_F(5));
+    CHECK(gui_sequence_key(0, 'Z', 0) == (GUI_BACKTAB | GUI_KEY_SHIFT));
+    CHECK(!gui_sequence_key(5, 'u', 5) && !gui_sequence_key(200, 'u', 1) && !gui_sequence_key(16, '~', 1));
+    /* a program's window: surfos/win.h's "The keys" */
+    CHECK(gui_program_key('s' | GUI_KEY_CTRL, &mods) == 19 && mods == WIN_MOD_CTRL);
+    CHECK(gui_program_key('S' | GUI_KEY_CTRL | GUI_KEY_SHIFT, &mods) == 19 && mods == (WIN_MOD_CTRL | WIN_MOD_SHIFT));
+    CHECK(gui_program_key('i' | GUI_KEY_CTRL, &mods) == 9 && mods == WIN_MOD_CTRL);
+    CHECK(gui_program_key(9 | GUI_KEY_CTRL, &mods) == WIN_KEY_TAB && mods == WIN_MOD_CTRL);     /* no Ctrl+I */
+    CHECK(gui_program_key(13 | GUI_KEY_CTRL, &mods) == WIN_KEY_ENTER && gui_program_key(27 | GUI_KEY_CTRL, &mods) ==
+          WIN_KEY_ESC && gui_program_key(127 | GUI_KEY_CTRL, &mods) == WIN_KEY_BACKSPACE);
+    CHECK(gui_program_key('[' | GUI_KEY_CTRL, &mods) == 27 && mods == WIN_MOD_CTRL);           /* Ctrl+[ is no Esc */
+    CHECK(gui_program_key('0' | GUI_KEY_CTRL, &mods) == '0' && gui_program_key('=' | GUI_KEY_CTRL, &mods) == '=' &&
+          gui_program_key('-' | GUI_KEY_CTRL, &mods) == '-' && gui_program_key('@' | GUI_KEY_CTRL, &mods) == '@');
+    CHECK(gui_program_key('/' | GUI_KEY_CTRL, &mods) == 31 && gui_program_key('\\' | GUI_KEY_CTRL, &mods) == 28);
+    CHECK(gui_program_key(9 | GUI_KEY_SHIFT, &mods) == WIN_KEY_BACKTAB && mods == WIN_MOD_SHIFT);
+    CHECK(gui_program_key(13 | GUI_KEY_SHIFT, &mods) == 13 && mods == WIN_MOD_SHIFT);
+    CHECK(gui_program_key('a' | GUI_KEY_REPEAT, &mods) == 'a' && mods == WIN_MOD_REPEAT);
+    CHECK(gui_program_key(GUI_SHIFT_ENTER, &mods) == 13 && mods == WIN_MOD_SHIFT);              /* (11/1/26) */
+    /* the desktop's own windows: as before */
+    CHECK(gui_own_key('s' | GUI_KEY_CTRL) == 19 && gui_own_key('S' | GUI_KEY_CTRL | GUI_KEY_SHIFT) == 19);
+    CHECK(gui_own_key(' ' | GUI_KEY_CTRL) == 0 && gui_own_key('/' | GUI_KEY_CTRL) == 31 && gui_own_key('[' | GUI_KEY_CTRL) == 27);
+    CHECK(gui_own_key(9 | GUI_KEY_CTRL) == 9 && gui_own_key(13 | GUI_KEY_CTRL) == 13 && gui_own_key(127 | GUI_KEY_CTRL) == 127);
+    CHECK(gui_own_key('0' | GUI_KEY_CTRL) == -1 && gui_own_key(27 | GUI_KEY_CTRL) == -1 && gui_own_key('=' | GUI_KEY_CTRL) == -1);
+    CHECK(gui_own_key(9 | GUI_KEY_SHIFT) == -1 && gui_own_key(GUI_F(5)) == -1 && gui_own_key(GUI_BACKTAB | GUI_KEY_SHIFT) == -1);
+    CHECK(gui_own_key('A' | GUI_KEY_SHIFT) == 'A' && gui_own_key(GUI_LEFT | GUI_KEY_CTRL) == GUI_LEFT);
+    CHECK(gui_own_key('q' | GUI_KEY_ALT | GUI_KEY_REPEAT) == 'q' && gui_own_key(19) == 19 && gui_own_key(0xC3) == 0xC3);
+}
+
+static void test_mod_keys(void) {
+    int a, id, n;
+    fake_desktop(&g, 960, 540);
+    a = shown(200, 100, 0, "Mods", 41, 0xC0FFEE);
+    id = win_id(a);
+    fake_win_forget(a);
+    gui_key(&g, GUI_LEFT | GUI_KEY_CTRL | GUI_KEY_SHIFT);          /* Ctrl+Shift+Left, an editor's word selection */
+    CHECK(got(a, WIN_KEY_LEFT, WIN_MOD_CTRL | WIN_MOD_SHIFT));
+    gui_key(&g, 'S' | GUI_KEY_CTRL | GUI_KEY_SHIFT);                /* Ctrl+Shift+S: its control byte, both */
+    CHECK(got(a, 19, WIN_MOD_CTRL | WIN_MOD_SHIFT));
+    gui_key(&g, 'x' | GUI_KEY_ALT);                                 /* Alt+X: no Esc before it any more */
+    CHECK(got(a, 'x', WIN_MOD_ALT) && !count_value(a, 27));
+    gui_key(&g, GUI_F(5));
+    CHECK(got(a, WIN_KEY_F5, 0));
+    gui_key(&g, GUI_F(12) | GUI_KEY_SHIFT);
+    CHECK(got(a, WIN_KEY_F12, WIN_MOD_SHIFT));
+    gui_key(&g, GUI_BACKTAB | GUI_KEY_SHIFT);
+    CHECK(got(a, WIN_KEY_BACKTAB, WIN_MOD_SHIFT));
+    gui_key(&g, 9 | GUI_KEY_SHIFT);                                 /* the keyboard's Shift+Tab */
+    CHECK(got(a, WIN_KEY_BACKTAB, WIN_MOD_SHIFT));
+    gui_key(&g, 9 | GUI_KEY_CTRL);                                  /* 11/05/26 (the review): no Ctrl+I */
+    CHECK(got(a, WIN_KEY_TAB, WIN_MOD_CTRL));
+    gui_key(&g, 13 | GUI_KEY_CTRL);
+    CHECK(got(a, WIN_KEY_ENTER, WIN_MOD_CTRL));
+    gui_key(&g, 27 | GUI_KEY_CTRL);
+    CHECK(got(a, WIN_KEY_ESC, WIN_MOD_CTRL));
+    gui_key(&g, '0' | GUI_KEY_CTRL);                                /* Zoom 100%: Ctrl+0 comes */
+    CHECK(got(a, '0', WIN_MOD_CTRL));
+    gui_key(&g, '=' | GUI_KEY_CTRL);
+    CHECK(got(a, '=', WIN_MOD_CTRL));
+    gui_key(&g, 'a' | GUI_KEY_REPEAT);                              /* a key held: its repeats say so */
+    CHECK(got(a, 'a', WIN_MOD_REPEAT));
+    gui_key(&g, '@' | GUI_KEY_CTRL | GUI_KEY_SHIFT);                /* Ctrl+@ is no Ctrl+Space */
+    CHECK(got(a, '@', WIN_MOD_CTRL | WIN_MOD_SHIFT) && !g.menu);
+    n = count(a, WIN_EV_KEY);
+    gui_key(&g, 'g' | GUI_KEY_CTRL);                                /* Ctrl+G: the menus */
+    CHECK(g.menu == 1 && count(a, WIN_EV_KEY) == n);
+    gui_key(&g, 27);
+    gui_key(&g, ' ' | GUI_KEY_CTRL);                                /* Ctrl+Space too */
+    CHECK(g.menu == 1 && count(a, WIN_EV_KEY) == n);
+    gui_key(&g, 27);
+    gui_key(&g, 'G' | GUI_KEY_CTRL | GUI_KEY_SHIFT | GUI_KEY_ALT);
+    CHECK(g.menu == 1 && count(a, WIN_EV_KEY) == n);
+    gui_key(&g, 27);
+    g.mods = WIN_MOD_SHIFT;                             /* a Shift+click: the pointer's events say so */
+    held = 0;
+    at(cx(id) + 10, cy(id) + 10);
+    hold(POINTER_LEFT);
+    CHECK(last(a, WIN_EV_POINTER)->value == WIN_BUTTON_LEFT && last(a, WIN_EV_POINTER)->mods == WIN_MOD_SHIFT);
+    hold(0);
+    g.mods = WIN_MOD_CTRL;
+    spin(-1);
+    CHECK(last(a, WIN_EV_WHEEL)->mods == WIN_MOD_CTRL);
+    g.mods = 0;
+    /* the desktop's own windows get the key alone, as before: no function key, no Ctrl with a digit, an Alt key without
+       an Esc before it (it closed what it was typed in), a Ctrl+letter its control byte */
+    gui_act(&g, ACT_NOTEPAD);
+    gui_key(&g, 'q' | GUI_KEY_SHIFT | GUI_KEY_ALT);
+    gui_key(&g, GUI_F(6));
+    gui_key(&g, '0' | GUI_KEY_CTRL);
+    gui_key(&g, 'r' | GUI_KEY_REPEAT);
+    CHECK(g.note.len == 2 && g.note.text[0] == 'q' && g.note.text[1] == 'r' && g.win[GUI_NOTEPAD].open);
+    gui_key(&g, 'a' | GUI_KEY_CTRL);                                /* Ctrl+A selects all, as 1 did */
+    gui_key(&g, 'z');
+    CHECK(g.note.len == 1 && g.note.text[0] == 'z');
+    /* the Terminal: an Alt key as a terminal sends it, Esc and the key (surfsh's Alt+.) */
+    fake_desktop(&g, 960, 540);
+    gui_key(&g, 't' | GUI_KEY_CTRL);
+    tick();
+    CHECK(g.focus == GUI_TERMINAL);
+    fake_term_in_len = 0;
+    gui_key(&g, '.' | GUI_KEY_ALT);
+    gui_key(&g, 'c' | GUI_KEY_CTRL);
+    gui_key(&g, 9 | GUI_KEY_CTRL);
+    CHECK(fake_term_in_len == 4 && !memcmp(fake_term_in, "\033.\003\t", 4));
+}
+
+static void test_client_menus(void) {
+    struct win_menu_item it[24];
+    int a, id, n = 0, x, y, w, h, b;
+    fake_desktop(&g, 960, 540);
+    a = shown(200, 100, 0, "Sheet", 41, 0xC0FFEE);
+    id = win_id(a);
+    it[n++] = entry(1, WIN_MENU_TITLE, "File", "");
+    it[n++] = entry(11, 0, "New", "Ctrl+N");
+    it[n++] = entry(12, WIN_MENU_SEPARATOR, "", "");
+    it[n++] = entry(13, WIN_MENU_DISABLED, "Save", "Ctrl+S");
+    it[n++] = entry(2, WIN_MENU_TITLE, "Format", "");
+    it[n++] = entry(21, WIN_MENU_RADIO | WIN_MENU_CHECKED, "General", "");
+    it[n++] = entry(22, WIN_MENU_RADIO, "Percent", "");
+    it[n++] = entry(3, WIN_MENU_TITLE | WIN_MENU_DISABLED, "Data", "");
+    it[n++] = entry(31, 0, "Sort", "");
+    fake_win_menus(a, it, n);
+    tick();
+    CHECK(client_at(&g, id)->view.menus == n && g.dirty);
+    CHECK(gui_menu_on(&g, MENU_CLIENT, ACT_CLIENT_MENU + 1) && !gui_menu_on(&g, MENU_CLIENT, ACT_CLIENT_MENU + 3));
+    CHECK(gui_menu_on(&g, MENU_CLIENT + 1, ACT_CLIENT_MENU + 6) && !gui_menu_on(&g, MENU_CLIENT + 2, ACT_CLIENT_MENU + 8));
+    gui_key(&g, 7);                                     /* Ctrl+G: "≋ SurfOS", then the program's menus */
+    CHECK(g.menu == 1);
+    gui_key(&g, GUI_RIGHT);
+    CHECK(g.menu == MENU_CLIENT && g.selection == 0);   /* File, on New */
+    gui_key(&g, GUI_DOWN);                              /* past the separator and the greyed Save: round to New */
+    CHECK(g.selection == 0);
+    gui_key(&g, '\r');
+    CHECK(g.menu == 0 && last(a, WIN_EV_MENU) && last(a, WIN_EV_MENU)->value == 11 && last(a, WIN_EV_MENU)->x == 1);
+    gui_key(&g, 7);
+    gui_key(&g, GUI_RIGHT);
+    gui_key(&g, GUI_RIGHT);
+    CHECK(g.menu == MENU_CLIENT + 1);
+    gui_key(&g, GUI_DOWN);
+    gui_key(&g, '\r');                                  /* Format > Percent */
+    CHECK(last(a, WIN_EV_MENU)->value == 22 && last(a, WIN_EV_MENU)->x == 2);
+    gui_key(&g, 7);
+    for(b = 0; b < 4; b++) gui_key(&g, GUI_RIGHT);      /* Data, greyed whole, then Apps */
+    CHECK(g.menu == 4);
+    gui_key(&g, GUI_LEFT);
+    CHECK(g.menu == MENU_CLIENT + 2);
+    b = count(a, WIN_EV_MENU);
+    gui_key(&g, '\r');
+    gui_act(&g, ACT_CLIENT_MENU + 8);                   /* nor by its act */
+    gui_act(&g, ACT_CLIENT_MENU + 3);
+    gui_act(&g, ACT_CLIENT_MENU + 0);                   /* a title is no item */
+    CHECK(count(a, WIN_EV_MENU) == b);
+    gui_key(&g, 27);
+    /* the mouse: its title in the bar opens it, an item chosen by a click */
+    gui_menu_box(&g, MENU_CLIENT, &x, &y, &w, &h);
+    click(x + 12, 10);
+    CHECK(g.menu == MENU_CLIENT);
+    click(x + 20, y + 4 + 12);                          /* New */
+    CHECK(g.menu == 0 && last(a, WIN_EV_MENU)->value == 11);
+    draw(960, 540);
+    CHECK(fake_guards(960, 540));
+    /* the focus elsewhere: the desktop's own menus, and a program's menu open closes */
+    gui_key(&g, 7);
+    gui_key(&g, GUI_RIGHT);
+    CHECK(g.menu == MENU_CLIENT);
+    gui_act(&g, ACT_NOTEPAD);
+    tick();
+    CHECK(g.menu == 0 && !gui_menu_on(&g, MENU_CLIENT, ACT_CLIENT_MENU + 1) && gui_menu_on(&g, 2, ACT_NEW));
+    gui_open(&g, id);
+    CHECK(gui_menu_on(&g, MENU_CLIENT, ACT_CLIENT_MENU + 1));
+    fake_win_menus(a, it, 0);                           /* taken away: File and Edit again */
+    tick();
+    CHECK(!gui_menu_on(&g, MENU_CLIENT, ACT_CLIENT_MENU + 1) && gui_menu_on(&g, 3, ACT_CLIENT_COPY));
+    /* 8 menus, as wide as the bar allows, at 640x400: inside the screen */
+    fake_desktop(&g, 640, 400);
+    a = shown(200, 100, 0, "Wide", 42, 0xC0FFEE);
+    for(n = 0, b = 0; b < WIN_MENUS; b++) {
+        it[n++] = entry(100 + b, WIN_MENU_TITLE, b < 4 ? "Abcd" : "X", "");      /* 4 x 7 + 4 x 4: WIN_MENU_BAR */
+        it[n++] = entry(200 + b, 0, "An item with a long label", "Ctrl+Shift+Z");
+    }
+    fake_win_menus(a, it, n);
+    tick();
+    for(b = 0; b < WIN_MENUS; b++) {
+        gui_key(&g, 7);
+        while(g.menu != MENU_CLIENT + b && g.menu) gui_key(&g, GUI_RIGHT);
+        gui_menu_box(&g, g.menu, &x, &y, &w, &h);
+        CHECK(x >= 0 && x + w <= 640 && y + h <= 400);
+        draw(640, 400);
+        CHECK(fake_guards(640, 400));
+        gui_key(&g, 27);
+    }
+    gui_key(&g, 7);                                     /* Help, last in the bar, still on the screen */
+    gui_key(&g, GUI_LEFT);
+    CHECK(g.menu == 6);
+    gui_menu_box(&g, 6, &x, &y, &w, &h);
+    CHECK(x + w <= 640);
+    gui_key(&g, 27);
+}
+
+/* 11/05/26 (the review): a program's submenus, one level deep, in their menu's place; its Help in the desktop's */
+static void test_submenus(void) {
+    struct win_menu_item it[16];
+    int a, n = 0, x, y, w, h, x2, y2, b;
+    fake_desktop(&g, 960, 540);
+    a = shown(200, 100, 0, "Zoomer", 41, 0xC0FFEE);
+    it[n++] = entry(1, WIN_MENU_TITLE, "View", "");
+    it[n++] = entry(11, WIN_MENU_SUBMENU, "Zoom", "");
+    it[n++] = entry(12, WIN_MENU_CHILD | WIN_MENU_RADIO | WIN_MENU_CHECKED, "100%", "Ctrl+0");
+    it[n++] = entry(13, WIN_MENU_CHILD | WIN_MENU_SEPARATOR, "", "");
+    it[n++] = entry(14, WIN_MENU_CHILD, "Fit", "");
+    it[n++] = entry(15, 0, "Grid", "");
+    it[n++] = entry(16, WIN_MENU_SUBMENU | WIN_MENU_DISABLED, "Ruler", "");
+    it[n++] = entry(17, WIN_MENU_CHILD, "Inches", "");
+    it[n++] = entry(2, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");
+    it[n++] = entry(21, 0, "Zoomer's keys", "");
+    it[n++] = entry(22, WIN_MENU_SUBMENU, "Topics", "");
+    it[n++] = entry(23, WIN_MENU_CHILD, "Pictures", "");
+    fake_win_menus(a, it, n);
+    tick();
+    /* the bar: SurfOS, View, Apps, Window, Help: the program's Help is no menu of its own */
+    CHECK(gui_menu_on(&g, MENU_CLIENT, ACT_CLIENT_MENU + 5) && !gui_menu_on(&g, MENU_CLIENT, ACT_CLIENT_MENU + 2));
+    CHECK(!gui_menu_on(&g, MENU_CLIENT + 1, ACT_CLIENT_MENU + 9));
+    gui_key(&g, 7);
+    gui_key(&g, GUI_RIGHT);
+    CHECK(g.menu == MENU_CLIENT && g.selection == 0);   /* View, on Zoom */
+    gui_menu_box(&g, MENU_CLIENT, &x, &y, &w, &h);
+    gui_key(&g, GUI_RIGHT);                             /* into its submenu, where View was */
+    CHECK(g.menu == MENU_CLIENT_SUB && g.selection == 0 && gui_menu_on(&g, MENU_CLIENT_SUB, ACT_CLIENT_MENU + 4));
+    gui_menu_box(&g, MENU_CLIENT_SUB, &x2, &y2, &w, &h);
+    CHECK(x2 == x && y2 == y);
+    draw(960, 540);
+    CHECK(fake_guards(960, 540));
+    gui_key(&g, GUI_DOWN);                              /* past the separator: Fit */
+    gui_key(&g, '\r');
+    CHECK(g.menu == 0 && last(a, WIN_EV_MENU)->value == 14 && last(a, WIN_EV_MENU)->x == 1);
+    gui_key(&g, 7);                                     /* Enter on Zoom opens it too; Left goes back, on Zoom */
+    gui_key(&g, GUI_RIGHT);
+    gui_key(&g, '\r');
+    CHECK(g.menu == MENU_CLIENT_SUB);
+    gui_key(&g, GUI_LEFT);
+    CHECK(g.menu == MENU_CLIENT && g.selection == 0);
+    gui_key(&g, 27);
+    /* nothing is chosen by an item that opens a submenu, nor a child of a greyed one */
+    b = count(a, WIN_EV_MENU);
+    gui_act(&g, ACT_CLIENT_MENU + 1);
+    gui_act(&g, ACT_CLIENT_MENU + 7);
+    gui_act(&g, ACT_CLIENT_MENU + 6);
+    CHECK(count(a, WIN_EV_MENU) == b);
+    /* the mouse: a click on Zoom opens its submenu, a click there chooses */
+    click(x + 12, 10);
+    CHECK(g.menu == MENU_CLIENT);
+    click(x + 20, y + 4 + 12);
+    CHECK(g.menu == MENU_CLIENT_SUB);
+    click(x + 20, y + 4 + 12);                          /* 100% */
+    CHECK(g.menu == 0 && last(a, WIN_EV_MENU)->value == 12 && last(a, WIN_EV_MENU)->x == 1);
+    /* Help: the program's items above the desktop's, a separator between */
+    CHECK(gui_menu_on(&g, 6, ACT_CLIENT_MENU + 9) && gui_menu_on(&g, 6, ACT_HELP) && gui_menu_on(&g, 6, ACT_ABOUT));
+    gui_key(&g, 7);
+    gui_key(&g, GUI_LEFT);
+    CHECK(g.menu == 6 && g.selection == 0);
+    gui_key(&g, '\r');
+    CHECK(last(a, WIN_EV_MENU)->value == 21 && last(a, WIN_EV_MENU)->x == 2);
+    gui_key(&g, 7);
+    gui_key(&g, GUI_LEFT);
+    gui_key(&g, GUI_DOWN);
+    gui_key(&g, GUI_RIGHT);                             /* Help > Topics */
+    CHECK(g.menu == MENU_CLIENT_SUB);
+    gui_key(&g, '\r');
+    CHECK(last(a, WIN_EV_MENU)->value == 23 && last(a, WIN_EV_MENU)->x == 2);
+    /* menus set again without the item: its submenu closes; the focus elsewhere: the desktop's Help alone */
+    gui_key(&g, 7);
+    gui_key(&g, GUI_RIGHT);
+    gui_key(&g, GUI_RIGHT);
+    CHECK(g.menu == MENU_CLIENT_SUB);
+    it[1] = entry(11, 0, "Zoom in", "");
+    fake_win_menus(a, it, 2);
+    tick();
+    CHECK(g.menu == 0);
+    gui_act(&g, ACT_NOTEPAD);
+    CHECK(!gui_menu_on(&g, 6, ACT_CLIENT_MENU + 9) && gui_menu_on(&g, 6, ACT_HELP));
+}
+
+/* 11/05/26 (the review): a full bar at 640x400, 79 of its 80 cells: "Ride the wave." gives way, every menu on screen */
+static void test_full_bar(void) {
+    struct win_menu_item it[2 * WIN_MENUS];
+    int a, n = 0, b, x, y, w, h;
+    fake_desktop(&g, 640, 400);
+    draw(640, 400);
+    CHECK(shows(640, 640 - 128, 6, "Ride the wave.", TEAL));
+    a = shown(200, 100, 0, "Full", 41, 0xC0FFEE);
+    for(b = 0; b < 4; b++) {                            /* 4 x (8 + 3) cells: WIN_MENU_BAR */
+        it[n++] = entry(100 + b, WIN_MENU_TITLE, "Abcdefgh", "");
+        it[n++] = entry(200 + b, 0, "An item with a long label, longer still", "Ctrl+Shift+F12");
+    }
+    fake_win_menus(a, it, n);
+    tick();
+    draw(640, 400);
+    CHECK(!shows(640, 640 - 128, 6, "Ride the wave.", TEAL) && shows(640, 8 + 8 * 11 + 4 * 11 * 8 + 7 * 8 + 9 * 8 + 4, 6,
+                                                                     "Help", INK));
+    CHECK(fake_guards(640, 400));
+    for(b = 1; b <= 6; b++) {                           /* the bar's menus, each inside the screen */
+        int m = b == 2 ? MENU_CLIENT : b == 3 ? MENU_CLIENT + 3 : b;
+        gui_menu_box(&g, m, &x, &y, &w, &h);
+        CHECK(x >= 0 && x + w <= 640 && y + h <= 400);
+    }
+}
+
+static void test_paste_given(void) {
+    int a, n;
+    fake_desktop(&g, 960, 540);
+    a = shown(200, 100, 0, "Paste", 41, 0xC0FFEE);
+    tick();
+    CHECK(fake_paste_count == 1 && fake_paste_len == 0);    /* given once, empty, while it has the focus */
+    tick();
+    CHECK(fake_paste_count == 1);
+    memcpy(g.clip, "hello", 5);
+    gui_clipped(&g, 5);                                 /* a copy: given again before any FOCUS */
+    tick();
+    CHECK(fake_paste_count == 2 && !strcmp(fake_paste, "hello"));
+    gui_act(&g, ACT_NOTEPAD);                           /* elsewhere: not given */
+    memcpy(g.clip, "world", 5);
+    gui_clipped(&g, 5);
+    tick();
+    CHECK(fake_paste_count == 2);
+    fake_win_forget(a);
+    gui_open(&g, win_id(a));                            /* back: given before its FOCUS */
+    tick();
+    n = fake_win_count(a, WIN_EV_FOCUS);
+    CHECK(fake_paste_count == 3 && !strcmp(fake_paste, "world") && n == 1 && last(a, WIN_EV_FOCUS)->value == 1);
+    for(n = 0; n < fake_wins[a].nev && fake_wins[a].ev[n].type != WIN_EV_FOCUS; n++) ;
+    CHECK(n < fake_wins[a].nev && fake_wins[a].paste_at <= n);     /* (the review of stage 2) given before it */
+}
+
+static struct win_dialog request(unsigned kind, unsigned id, const char *dir, const char *name, const char *types) {
+    struct win_dialog d;
+    memset(&d, 0, sizeof(d));
+    d.kind = kind;
+    d.id = id;
+    strlcpy(d.dir, dir, sizeof(d.dir));
+    strlcpy(d.name, name, sizeof(d.name));
+    strlcpy(d.types, types, sizeof(d.types));
+    return d;
+}
+
+/* 11/05/26 (the review of stage 2): the pointer events window a got from its n-th on with a button held */
+static int pressed_after(int a, int from) {
+    int i, n = 0;
+    for(i = from; i < fake_wins[a].nev; i++)
+        if(fake_wins[a].ev[i].type == WIN_EV_POINTER && fake_wins[a].ev[i].value) n++;
+    return n;
+}
+
+/* P1 and P2: a click on the desktop's chooser over a window, the pointer moving before the release, sends the window
+   no event with a button held (the kernel would take it for a press in the window, and let the program ask again at
+   once; Paint would take it for a drag) */
+static void test_dialog_pointer(void) {
+    struct win_dialog d;
+    int a, id, x, y, w, h, bx, by, mark;
+    fake_desktop(&g, 960, 540);
+    fake_file("/home/cat.png", "p", 1);
+    a = shown(900, 420, 0, "Paint", 41, 0xC0FFEE);
+    id = win_id(a);
+    held = 0;
+    at(cx(id) + 300, cy(id) + 200);                     /* the pointer rests on the canvas */
+    CHECK(g.clients.hover == id);
+    d = request(WIN_DLG_OPEN, 3, "/home", "", "");
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_OPEN);
+    mark = fake_wins[a].nev;
+    dialog_box(&g, &x, &y, &w, &h);
+    bx = x + w - 16 - 88 + 44;                          /* Cancel, the rightmost button */
+    by = y + h - 40 + 14;
+    at(bx, by);
+    CHECK(g.clients.hover == -1 && last(a, WIN_EV_POINTER)->value == 0);   /* the window was told it left */
+    hold(POINTER_LEFT);
+    CHECK(!g.dialog.kind && fake_wins[a].cancels == 1);
+    at(bx + 2, by + 1);                                 /* a small move with the button still down */
+    hold(0);
+    CHECK(pressed_after(a, mark) == 0);
+    /* P2: a double-click on a file, a jitter between the second press and its release */
+    held = 0;
+    at(cx(id) + 300, cy(id) + 200);
+    d = request(WIN_DLG_OPEN, 4, "/home", "", "png");
+    fake_win_ask(a, &d);
+    tick();
+    mark = fake_wins[a].nev;
+    dialog_box(&g, &x, &y, &w, &h);
+    bx = x + 60;
+    by = y + 64 + ROW_H + ROW_H / 2;                    /* the row after "..": cat.png */
+    at(bx, by);
+    hold(POINTER_LEFT);
+    hold(0);
+    hold(POINTER_LEFT);                                 /* the second press opens it */
+    CHECK(!g.dialog.kind && fake_wins[a].answers == 1 && !strcmp(fake_wins[a].answer, "/home/cat.png"));
+    at(bx + 1, by);
+    hold(0);
+    CHECK(pressed_after(a, mark) == 0);
+    /* a press in the window afterwards is its own again, button and all */
+    at(cx(id) + 10, cy(id) + 10);
+    hold(POINTER_LEFT);
+    CHECK(last(a, WIN_EV_POINTER)->value == WIN_BUTTON_LEFT && g.clients.grab == id);
+    /* a dialog of the desktop's coming up in the middle of the window's drag: it hears every button let go */
+    dialog_message(&g, "Busy", "", "");
+    at(cx(id) + 20, cy(id) + 20);
+    CHECK(g.clients.grab == -1 && last(a, WIN_EV_POINTER)->value == 0 && last(a, WIN_EV_POINTER)->x == -1);
+    hold(0);
+    gui_key(&g, '\r');
+}
+
+/* M4: the close button asks a program that reads its events again at each press (its own "Save the changes?" was
+   answered Cancel); "End the program?" comes for one that has not read the CLOSE it was sent, or at the third press in
+   GUI_CLOSE_MS */
+static void test_close_again(void) {
+    int a, id;
+    fake_desktop(&g, 960, 540);
+    program(41, "wpaint");
+    a = shown(200, 100, 0, "Paint", 41, 0xC0FFEE);
+    id = win_id(a);
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 1 && !g.dialog.kind);
+    fake_win_read(a);                                   /* the program read it, asked its question, was told Cancel */
+    tick();
+    g.now += 4000;
+    gui_act(&g, ACT_CLOSE);                             /* asked again, not ended */
+    CHECK(count(a, WIN_EV_CLOSE) == 2 && !g.dialog.kind);
+    fake_win_read(a);
+    tick();
+    g.now += 4000;
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 3 && !g.dialog.kind);
+    tick();                                             /* not read this time: the program is stuck, or busy */
+    g.now += 100;
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 3 && g.dialog.kind == GUI_DLG_CONFIRM &&
+          g.dialog.act == ACT_CLIENT_END + (id - GUI_FIRST_CLIENT) && !strcmp(g.dialog.title, "End the program?"));
+    gui_key(&g, 27);                                    /* Cancel */
+    /* one that reads CLOSE and ignores it: three presses in GUI_CLOSE_MS offer to end it */
+    fake_win_read(a);
+    tick();
+    g.now += 4000;
+    gui_act(&g, ACT_CLOSE);
+    fake_win_read(a);
+    tick();
+    g.now += 500;
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 5 && !g.dialog.kind);
+    fake_win_read(a);
+    tick();
+    g.now += 500;
+    gui_act(&g, ACT_CLOSE);                             /* the third: two CLOSEs it read in the last 3 seconds */
+    CHECK(count(a, WIN_EV_CLOSE) == 5 && g.dialog.kind == GUI_DLG_CONFIRM);
+    gui_key(&g, GUI_RIGHT);                             /* End */
+    gui_key(&g, '\r');
+    CHECK(fake_killed == 41 && !client_at(&g, id));
+}
+
+static void test_choosers(void) {
+    struct win_dialog d;
+    int a, b, c, id, i, txt;
+    fake_desktop(&g, 960, 540);
+    fake_dir("/home/pics");
+    fake_file("/home/notes.txt", "n", 1);
+    fake_file("/home/cat.png", "p", 1);
+    fake_file("/home/dog.PNG", "p", 1);
+    program(41, "wpaint");
+    a = shown(200, 100, 0, "SurfOS", 41, 0xC0FFEE);    /* a window that says it is the desktop */
+    id = win_id(a);
+    d = request(WIN_DLG_OPEN, 3, "/home", "", "png");
+    strlcpy(d.title, "Open a picture", sizeof(d.title));
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.dir, "/home"));
+    /* 11/05/26 (the review): the title names the program it is for; (the review of stage 2) by a name it cannot set,
+       its program's, not its window's, and with no sign of the desktop's before it */
+    CHECK(!strcmp(g.dialog.title, "wpaint: Open a picture") && g.dialog.program);
+    {
+        int dx, dy, dw, dh;
+        dialog_box(&g, &dx, &dy, &dw, &dh);
+        draw(960, 540);
+        CHECK(shows(960, dx + 12, dy + 6, "wpaint: Open", PAPER));
+    }
+    for(i = 0, txt = 0; i < g.dialog.count; i++) if(strstr(g.dialog.list[i].name, ".txt")) txt++;
+    CHECK(g.dialog.count == 3 && !txt);                 /* pics, cat.png and dog.PNG: its type in any case */
+    gui_key(&g, GUI_DOWN);                              /* .., pics, cat.png */
+    gui_key(&g, GUI_DOWN);
+    gui_key(&g, '\r');
+    CHECK(!g.dialog.kind && fake_wins[a].answers == 1 && !strcmp(fake_wins[a].answer, "/home/cat.png"));
+    CHECK(last(a, WIN_EV_DIALOG)->value == 1 && last(a, WIN_EV_DIALOG)->x == 3);
+    /* Save as: a name gets its type; a file there asks first */
+    d = request(WIN_DLG_SAVE, 4, "/home", "picture", "png bmp");
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_SAVE && !strcmp(g.dialog.field.text, "picture"));
+    gui_key(&g, '\r');
+    CHECK(fake_wins[a].answers == 2 && !strcmp(fake_wins[a].answer, "/home/picture.png"));
+    d = request(WIN_DLG_SAVE, 5, "/home", "cat.png", "png");
+    fake_win_ask(a, &d);
+    tick();
+    gui_key(&g, '\r');
+    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.title, "Replace the file?") && fake_wins[a].answers == 2);
+    gui_key(&g, '\r');                                  /* Replace */
+    CHECK(fake_wins[a].answers == 3 && !strcmp(fake_wins[a].answer, "/home/cat.png"));
+    fake_win_ask(a, &d);
+    tick();
+    gui_key(&g, '\r');
+    gui_key(&g, 27);                                    /* Cancel at the question */
+    CHECK(fake_wins[a].cancels == 1 && last(a, WIN_EV_DIALOG)->value == 0);
+    /* a file the desktop takes care of (a pair beside it) is refused */
+    strlcpy(g.unsure[0], "/home/cat.png", GUI_PATH_MAX);
+    strlcpy(g.kept[0], "/home/cat.png.tmp", GUI_PATH_MAX);
+    g.nunsure = 1;
+    fake_win_ask(a, &d);
+    tick();
+    gui_key(&g, '\r');
+    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && fake_wins[a].cancels == 2);
+    gui_key(&g, '\r');
+    g.nunsure = 0;
+    /* Choose folder: folders only; Enter takes the selected one, or the one shown on .. */
+    d = request(WIN_DLG_FOLDER, 6, "/home", "", "");
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_FOLDER && g.dialog.count == 1 && g.dialog.list[0].type == GUI_DIR);
+    gui_key(&g, '\r');                                  /* .. selected: the folder shown */
+    CHECK(fake_wins[a].answers == 4 && !strcmp(fake_wins[a].answer, "/home"));
+    fake_win_ask(a, &d);
+    tick();
+    gui_key(&g, GUI_DOWN);
+    gui_key(&g, GUI_RIGHT);                             /* into pics */
+    CHECK(g.dialog.kind == GUI_DLG_FOLDER && !strcmp(g.dialog.dir, "/home/pics"));
+    gui_key(&g, GUI_LEFT);                              /* up again, then pics chosen */
+    gui_key(&g, GUI_DOWN);
+    gui_key(&g, '\r');
+    CHECK(fake_wins[a].answers == 5 && !strcmp(fake_wins[a].answer, "/home/pics"));
+    /* without the focus, or under another dialog: cancelled at once */
+    gui_act(&g, ACT_NOTEPAD);
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(!g.dialog.kind && fake_wins[a].cancels == 3);
+    gui_open(&g, id);
+    dialog_message(&g, "Busy", "", "");
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && fake_wins[a].cancels == 4);
+    gui_key(&g, '\r');
+    /* replaced before it was answered: cancelled; its window gone: closed */
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_FOLDER);
+    dialog_message(&g, "Something else", "", "");
+    CHECK(fake_wins[a].cancels == 5);
+    gui_key(&g, '\r');
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_FOLDER);
+    fake_win_end(a);
+    tick();
+    CHECK(!g.dialog.kind && !client_at(&g, id));
+    b = shown(200, 100, 0, "Other", 42, 0xC0FFEE);      /* a slot used again: the old answer is not its */
+    CHECK(fake_wins[b].answers == 0 && fake_wins[b].cancels == 0);
+    CHECK(fake_wins[a].wrong == 0);                     /* every answer named the request that waited */
+    /* (the review of stage 2) a folder that cannot be read: the last chooser's, then / */
+    d = request(WIN_DLG_OPEN, 9, "/nowhere", "", "");
+    fake_win_ask(b, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.dir, "/home"));
+    gui_key(&g, 27);
+    strlcpy(g.dialog.dir, "/gone", sizeof(g.dialog.dir));
+    fake_win_ask(b, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.dir, "/"));
+    gui_key(&g, 27);
+    /* a path the kernel refuses is answered as cancelled: the request never waits on */
+    d = request(WIN_DLG_FOLDER, 10, "/home", "", "");
+    fake_win_ask(b, &d);
+    tick();
+    fake_answer_refused = true;
+    gui_key(&g, '\r');
+    fake_answer_refused = false;
+    CHECK(!g.dialog.kind && fake_wins[b].cancels == 3 && !fake_wins[b].waiting);
+    /* 11/05/26 (the review): one dialog at a time: "End the program?" in a chooser's place answers the chooser */
+    id = win_id(b);
+    d = request(WIN_DLG_OPEN, 7, "/home", "", "");
+    fake_win_ask(b, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.title, "pid 42: Open a file"));   /* no name known */
+    gui_act(&g, ACT_CLOSE);                             /* (the close button twice, as Close in the menus) */
+    gui_act(&g, ACT_CLOSE);
+    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && g.dialog.act == ACT_CLIENT_END + (id - GUI_FIRST_CLIENT));
+    CHECK(fake_wins[b].cancels == 4 && last(b, WIN_EV_DIALOG)->value == 0 && last(b, WIN_EV_DIALOG)->x == 7);
+    gui_key(&g, 27);
+    CHECK(fake_wins[b].wrong == 0);
+    /* the window's title is never the chooser's name, the program's file name is */
+    program(43, "wcode");
+    c = shown(200, 100, 0, "Apps", 43, 0xC0FFEE);
+    d = request(WIN_DLG_SAVE, 8, "/home", "x", "");
+    fake_win_ask(c, &d);
+    tick();
+    CHECK(!strcmp(g.dialog.title, "wcode: Save as"));
+    gui_key(&g, 27);
+    CHECK(fake_wins[c].cancels == 1);
+}
+
+static void test_theme_told(void) {
+    fake_desktop(&g, 960, 540);
+    tick();
+    CHECK(fake_theme == WIN_THEME_OCEAN && fake_theme_count == 1 && fake_colors[WIN_COLOR_DESKTOP] == 0x245A67 &&
+          fake_colors[WIN_COLOR_WINDOW] == PAPER && fake_colors[WIN_COLOR_ACCENT] == TEAL);
+    tick();
+    CHECK(fake_theme_count == 1);                       /* once */
+    gui_act(&g, ACT_THEME);
+    tick();
+    CHECK(fake_theme == WIN_THEME_DUSK && fake_theme_count == 2 && fake_colors[WIN_COLOR_DESKTOP] == 0x142638);
+    CHECK(fake_pref_sets == 0);                         /* (the review of stage 2) kept once it has stood */
+    g.now += GUI_PREF_MS;
+    tick();
+    CHECK(fake_pref_sets == 1 && fake_pref_which == 0 && fake_pref_value == 1);  /* and kept in the settings */
+}
+
 int main(void) {
     test_appear();
     test_clip();
@@ -1139,6 +1809,16 @@ int main(void) {
     test_app_program();
     test_asked_focus();
     test_alert_clip();
+    test_full_keys();
+    test_mod_keys();                                    /* 11/05/26 (track desk) */
+    test_client_menus();
+    test_submenus();                                    /* 11/05/26 (the review of the ABI) */
+    test_full_bar();
+    test_paste_given();
+    test_choosers();
+    test_dialog_pointer();                              /* 11/05/26 (the review of stage 2) */
+    test_close_again();
+    test_theme_told();
     test_guards(640, 400);
     test_guards(960, 540);
     test_guards(1280, 800);

@@ -338,7 +338,7 @@ static void clip(struct gui_state *g, const char *s) {
     u32 len = strlen(s);
     if(len > GUI_CLIP_MAX) len = GUI_CLIP_MAX;
     memcpy(g->clip, s, len);
-    g->clip_len = len;
+    gui_clipped(g, len);
 }
 
 static void copy(struct gui_state *g) {
