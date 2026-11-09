@@ -1,0 +1,108 @@
+wcode - the Code Editor: text and code in a window, a tab a file
+
+SYNOPSIS
+    wcode [file ...]
+
+DESCRIPTION
+    A window on the desktop for editing text and code: up to 8 files
+    in tabs, each of up to 16 MB, with line numbers, colours for C and
+    headers, assembly (NASM's .asm and GNU as's .s and .S), Python,
+    shell, Makefiles, Markdown and JSON, find and replace, find in
+    files, auto-indent and matching brackets. It needs a desktop:
+    Apps > Programs, its tile, Files (which opens the types it names),
+    or the desktop's Terminal start it. A file named that is not there
+    yet is a new file, made when it is first saved.
+
+    A file keeps its bytes: its line ends (LF, CR LF or both; a new
+    one is the kind most of its lines have), and bytes that are not
+    UTF-8, shown as the console's characters. A file with a NUL byte
+    is not text and is not opened (Hex shows it). Tabs reach the next
+    multiple of 8 columns; Tab indents as the file does, with tabs or
+    its own number of spaces.
+
+    Saving writes the text to a new file beside the file (file.tmp, or
+    file.1.tmp and so on when those names are yours), syncs it and
+    renames it over the file, which is never truncated. If a rename
+    may have been half done (an I/O error), or a name beside the file
+    looks like its other half, nothing is written over the file again
+    while it is open: each save puts a copy beside it, and the status
+    bar asks to have the disk checked first. If the file changed on
+    the disk since it was read (another wcode or Notepad saved it),
+    Save asks first: save over it, Save as, or leave it. A file is
+    open once: two names of it (a.c and A.C, or one with . or ..)
+    take the same tab.
+
+    Closing a tab, Quit and the close button ask about every file with
+    unsaved changes (Save, Don't save, Cancel). If the desktop ends
+    first, each such file's text is put beside it under a new name
+    and the program's error output says where; a file never saved is
+    lost then.
+
+    Find takes text or a regular expression (POSIX, extended), in
+    either case or only the same, whole words if asked; a match never
+    spans lines and is never empty: a pattern that also matches an
+    empty text (x*, ^ or $ alone) is refused, so write x+ for x*. In
+    a replacement with a regular expression, & is the match, \1 to \9
+    its groups and \n a line end. Whole words with a regular
+    expression are words as it takes them (ASCII letters, digits and
+    _), and \9 cannot be used then. A long search, or Replace all,
+    goes on between keys, and Esc stops it; while Replace all changes
+    the file the keys wait, and Esc takes back what it did. A Replace
+    all too large to undo asks first, since Esc cannot take it back
+    either. Find in files
+    searches a folder from / and the folders in it, as the files are
+    on the disk, and lists each matching line; Enter on one opens it
+    there.
+
+KEYS
+    Arrows, Home, End, PgUp, PgDn    move; with Shift, select
+    Ctrl+Left, Ctrl+Right            a word
+    Ctrl+Home, Ctrl+End              the start, the end
+    Home                             the indentation's end, then the
+                                     line's start
+    Tab, Shift+Tab                   indent, outdent (lines selected)
+    Backspace, Delete                a character; with Ctrl, a word
+    Ctrl+Z, Ctrl+Y                   undo, redo (Ctrl+Shift+Z too)
+    Ctrl+X, Ctrl+C, Ctrl+V           cut, copy, paste (the desktop's
+                                     clipboard, 128 KB)
+    Ctrl+A                           select all
+    Ctrl+F, F5, Shift+F5             find, the next, the one before
+    Ctrl+H                           replace
+    Ctrl+Shift+F                     find in files
+    Ctrl+L                           go to a line (or line:column)
+    Ctrl+B                           to the matching bracket
+    Ctrl+/                           comment the lines, or uncomment
+    Ctrl+], Ctrl+[                   indent, outdent the lines
+    Ctrl+N, Ctrl+O                   new, open
+    Ctrl+S, Ctrl+Shift+S             save, save as
+    Ctrl+W, Ctrl+Q                   close the tab, quit
+    Ctrl+Tab, Ctrl+PgDn              the next tab; with Shift, or
+                                     Ctrl+PgUp, the one before
+    Esc                              close the find bar; drop the
+                                     selection
+
+    The mouse places the caret, drags a selection, takes a word with a
+    double click and a line with a third or on its line number; the
+    wheel and the scroll bars move the view. The menus are in the
+    desktop's bar while the window has the focus.
+
+LIMITS
+    16 MB a file, 32 MB for all open files together, 8 files. The
+    last 4,096 changes are kept to undo, 3 MB of them; one change
+    larger (Replace all in a large file, say) cannot be undone, and
+    the status bar says so. Lines do not wrap; a line is coloured in
+    its first 8 KB and the rest plain (a comment opened past them
+    does not go on to the next line, and the indentation Enter or a
+    closing bracket gives on or after such a line may differ). A
+    pattern with large counts, .{1000}x say, can take seconds a line
+    on a line of megabytes. A copy larger than the
+    clipboard's 128 KB is refused. Find in files reads at most 20,000
+    files and 256 MB, lists 2,000 lines, never reads /dev, and leaves
+    out a line too costly to search, saying how many. There is no
+    overwrite mode, no word wrap and no printing.
+
+EXAMPLES
+    wcode /usb1p1/src/main.c /usb1p1/src/Makefile
+
+SEE ALSO
+    gui, edit, files, regex

@@ -1021,6 +1021,78 @@ zoom.
   file and the decoder's memory beside that for a moment: about 340 MB at the very peak, for the
   largest progressive JPEG with Paint at its bound.
 
+### Code Editor
+
+*11/05/26* (`docs/superpowers/plans/2026-11-05-desktop-apps.md`, track code). **Code Editor** is the
+program `wcode` (`user/wcode/`), a window for text and code: up to 8 files in tabs, each of up to
+16 MB. Apps > Programs and its tile start it; Files opens in it the types its entry names (`.c .h
+.asm .nasm .inc .s .S .py .sh .bash .mk .mak .md .markdown .json`, `Makefile` and `GNUmakefile`),
+and offers it under Open with for `.txt .log .conf .cfg .ini`, which stay Notepad's; `wcode file ...`
+in the Terminal opens those files, and a name that is not there yet is a new file, made when it is
+first saved.
+
+* **The tabs.** A tab a file, its name and ` *` while it has unsaved changes; a click, Ctrl+Tab or
+  Ctrl+PgDn (with Shift, or Ctrl+PgUp, back) changes the file shown, and a tab's x closes it.
+* **The text.** Line numbers in a gutter at the left, the caret's in ink; scroll bars when the text
+  does not fit; no wrapping. Colours for C and headers, assembly (NASM's `.asm`, GNU as's `.s` and
+  `.S` with their C preprocessor), Python, shell, Makefiles, Markdown and JSON, by the file's name
+  or its `#!` line, and View > Language changes it. The bracket at the caret and its match are
+  marked (a bracket with no match within 2,000 lines in coral); brackets in comments and strings do
+  not count. The characters are the console's, as in Notepad: UTF-8 as code page 437, a byte that
+  is not UTF-8 as the 437 character it is, a lone CR as ♪; a tab reaches the next multiple of 8.
+* **Editing.** The usual keys: the arrows, Home (to the indentation, then the line's start), End,
+  Page Up and Down, with Shift to select and with Ctrl by words or to either end; Backspace and
+  Delete, with Ctrl a word. The mouse places the caret, drags a selection (past the edges the text
+  scrolls to it), takes a word with a double click and a line with a third or on its number.
+  Ctrl+Z and Ctrl+Y undo and redo in steps a person would expect: a run of typing, of Backspace or
+  of Delete is one, as are an Enter, a paste, a cut, Replace all. Ctrl+X, Ctrl+C and Ctrl+V use the
+  desktop's clipboard (128 KB, LF line ends).
+* **Indentation.** A file is indented as it is already: tabs if most of its indented lines start
+  with one, otherwise its own number of spaces (2, 4 or 8); a Makefile with tabs, anything new with
+  4 spaces. Enter keeps the line's indentation and adds a step after an opening bracket, Python's
+  `:`, a shell's `then`, `do` and `else`, and a Makefile's rule (a tab); between brackets the
+  closing one goes on a line of its own. A closing bracket typed on a line of its own takes the
+  indentation of its opening one's line. Tab and Shift+Tab (or Ctrl+] and Ctrl+[) indent and
+  outdent the lines selected; Ctrl+/ comments them or uncomments them; Backspace in an indentation
+  of spaces goes back a step. Ctrl+B goes to the matching bracket, Ctrl+L to a line (or
+  `line:column`).
+* **Find and replace.** Ctrl+F opens the find bar under the text: text or a regular expression
+  (POSIX, extended: libsurf's), in either case unless Case is on, whole words if Words is. Enter
+  finds the next match, Shift+Enter the one before, round the ends; F5 and Shift+F5 do it with the
+  bar closed; Esc closes it. Ctrl+H adds the replacement's line: Replace replaces the match
+  selected and finds the next, Replace all replaces every match as one step to undo. With a regular
+  expression, `&` in the replacement is the match, `\1` to `\9` its groups and `\n` a line end. A
+  match never spans lines and is never empty: a pattern that also matches an empty text (`x*`, `^`)
+  is refused. A long search, and Replace all, go on between keys, the status bar saying so, and Esc
+  stops them; while Replace all changes the file the keys wait, and Esc takes back what it did. A
+  Replace all too large to undo asks first (Esc could not take it back either).
+* **Find in files.** Ctrl+Shift+F: what to find, the names to look in (`*.c *.h`, or every file) and
+  the folder, from / (Folder… asks the desktop's chooser; `/a/../dev` is `/dev`, never read). It reads the folder and those in it a piece at
+  a time, so the window answers and Stop ends it, holding one folder and one file open at a time;
+  it reads the files as they are on the disk, never `/dev`, and leaves out files that are not text.
+  Each matching line is listed with its file and number; Enter or a double-click opens it at the
+  match. At most 20,000 files, 256 MB and 2,000 lines, and the line under the list says what a
+  limit left out: folders it could not read or that were too deep, files that are not text, lines too
+  costly to search.
+* **The bytes are kept.** A file keeps its line ends, LF, CR LF or both (a new one is the kind most
+  of its lines have; the status bar says which), and its bytes that are not UTF-8. A file with a
+  NUL byte is not text and is not opened.
+* **Saving.** As Notepad saves: the text goes into a new file beside the file (`<file>.tmp`, or
+  `<file>.1.tmp` and so on when those names are yours), synced, then renamed over it; the file is
+  never truncated. Save as of a new name makes the file (`O_EXCL`), and deletes it again if the save
+  fails. After a rename that may have half happened, or when a name beside the file looks like its
+  other half (of its size and time), nothing is renamed or written over the file again while it is
+  open: each save puts a copy beside it, and the status bar asks to have the disk checked first. A
+  file changed on the disk since it was read (another wcode, Notepad) is not saved over without a
+  question: save over it, Save as, or leave it. A file is open once, whatever spelling names it.
+* **Unsaved changes.** Close tab (Ctrl+W, a tab's x), Quit (Ctrl+Q) and the close button ask about
+  each file with unsaved changes in turn, Save, Don't save or Cancel; a file never saved asks for
+  its name first, and a Cancel keeps everything open. When the desktop ends first, each such file's
+  text is put beside it under a new name, and the program's error output says where.
+* **Limits.** 16 MB a file, 32 MB for the files open together, 8 files; 4,096 steps and 3 MB to undo
+  a file (a larger change cannot be undone, and the status bar says so). A line is coloured in its
+  first 8 KB, the rest plain. A copy of more than 128 KB is refused. No overwrite mode, no word wrap.
+
 ## Programs' windows
 
 *10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
