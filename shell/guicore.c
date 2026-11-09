@@ -41,6 +41,23 @@ or brings its window to the front when the program it started last has one (app_
 press before that window came, within GUI_START_MS, starts nothing: a double-click), and
 guiclient.c puts that window where the slot's stands. Edit > Copy for a program's window is its
 Ctrl+C.
+11/05/26 (the desktop applications, docs/superpowers/plans/2026-11-05-desktop-apps.md, track desk).
+The menu bar is a list (bar()): the desktop's six menus, or, while a program's window with menus of
+its own has the focus, "≋ SurfOS", its menus in place of File and Edit (its Help's items first in
+the desktop's Help), then Apps, Window and Help. Items open menus of their own in their parent's
+place (Left goes back): Apps > Programs, the registry's programs (shell/guireg.c), Files' File >
+Open with, every program that takes the selected file, and a program's submenus (MENU_CLIENT_SUB).
+A menu taller than the room below it scrolls (the arrows, the wheel, strips of arrows at its ends),
+as Apps does on a 640x400 screen once Programs is in it. The registry's
+programs with desktop = yes have tiles after the suite's, and the windows of programs the desktop
+started from the registry have their icons. SurfOS > Screenshot (and Print Screen, shell/gui.c):
+the frame is captured, then the Save as chooser asks where, in the first writable volume mounted,
+and the picture is saved through struct gui_fs's write, Notepad's care included. Pointer & desktop
+keeps its theme and speed in the settings on the stick (struct gui_sys's pref_set), and the desktop
+reads them each second (prefs()), so that a change made by Settings applies at once. Keys come as
+full keys (sys/gui.h: gui_byte_key(), gui_sequence_key()); a program's window gets them with their
+modifiers (guiclient.c), the desktop's own windows as before (gui_own_key()), the Terminal an Alt
+key as Esc and the key.
 */
 #include "guipriv.h"
 #include "gui_media.h"
@@ -54,7 +71,7 @@ static const int app_icons[] = { ICON_CALC, ICON_SKETCH, ICON_WAVE, ICON_GEAR, I
 static const char keys[] = "789/456*123-C0=+";
 static const char *const menu_names[] = { "\xF7 SurfOS", "File", "Edit", "Apps", "Window", "Help" };
 #define MENUS 6
-#define MENU_MAX 32
+#define MENU_MAX 48                     /* 11/05/26: 32 before: Open with lists the registry's and three */
 static const struct { const char *label; int app, icon; } tiles[] = {
     { "Notepad", GUI_NOTEPAD, ICON_NOTEPAD }, { "Files", GUI_FILES, ICON_FILES },
     { "Calculator", GUI_CALC, ICON_CALC }, { "Sketch", GUI_SKETCH, ICON_SKETCH },
@@ -391,6 +408,7 @@ void gui_init(struct gui_state *g, int width, int height) {
     g->focus=g->drag=g->resize=g->scroll=g->app_drag=-1; g->brush=1; g->speed=1;
     g->title_id=g->files.click_row=g->dialog.click_row=-1;
     g->clients.grab=g->clients.hover=-1;                /* 10/25/26 */
+    g->theme_given=g->pref_theme=g->pref_speed=-1;      /* 11/05/26: told nothing, read nothing yet */
     g->x=width/2; g->y=height/2;
     for(i=0;i<GUI_SLOTS;i++) g->order[i]=i;
     g->win[GUI_CALC]=(struct gui_window){width-272,50,248,300};
@@ -416,7 +434,8 @@ void gui_init(struct gui_state *g, int width, int height) {
 
 /**** the menus ****/
 
-struct menu_item { const char *label, *keys; int act; bool on; };
+/* 11/05/26: mark: a program's checked item ('v') or one of a group ('o'); sub: it opens a menu of its own */
+struct menu_item { const char *label, *keys; int act; bool on, sub; char mark; };
 
 /* 10/17/26: the focused application, when the Edit menu is its own */
 static const struct gui_app *edit_app(const struct gui_state *g) {
@@ -429,24 +448,184 @@ static bool item_room(const struct gui_state *g, int count) {
     return MENU_H + 4 + (count + 1) * 24 + 4 <= g->height - TASK_H && count < MENU_MAX;
 }
 
+/* 11/05/26 (track desk): the focused program's menus in the bar: the entry of its k-th title that is not its Help
+   (merged into the desktop's Help instead, surfos/win.h's WIN_MENU_HELP), -1; its Help title's entry, -1 */
+static int client_title_entry(const struct gui_state *g, int k, const struct win_menu_item **mp, int *count) {
+    const struct win_menu_item *m = client_menu(g, count);
+    int i;
+    *mp = m;
+    for(i = 0; m && i < *count; i++)
+        if((m[i].flags & WIN_MENU_TITLE) && !(m[i].flags & WIN_MENU_HELP) && k-- == 0) return i;
+    return -1;
+}
+
+static int client_help_entry(const struct gui_state *g, const struct win_menu_item **mp, int *count) {
+    const struct win_menu_item *m = client_menu(g, count);
+    int i;
+    *mp = m;
+    for(i = 0; m && i < *count; i++) if((m[i].flags & WIN_MENU_TITLE) && (m[i].flags & WIN_MENU_HELP)) return i;
+    return -1;
+}
+
+/* the menu bar's menus, in order: the desktop's six, or, while a program's window with menus of its own in the bar
+   has the focus, "≋ SurfOS", its menus (MENU_CLIENT + k) in place of File and Edit, then Apps, Window and Help. The
+   menus an item opens (Apps > Programs, File > Open with, a program's submenu) stand in their parent's place */
+#define BAR_MAX (3 + WIN_MENUS + 3)
+static int bar(const struct gui_state *g, int *out) {
+    const struct win_menu_item *m;
+    int n = 0, k = 0, count;
+    out[n++] = 1;
+    while(k < WIN_MENUS && client_title_entry(g, k, &m, &count) >= 0) out[n++] = MENU_CLIENT + k++;
+    if(!k) {
+        out[n++] = 2;
+        out[n++] = 3;
+    }
+    out[n++] = 4;
+    out[n++] = 5;
+    out[n++] = 6;
+    return n;
+}
+
+static int bar_parent(const struct gui_state *g, int m) {
+    return m == MENU_PROGRAMS ? 4 : m == MENU_OPEN_WITH ? 2 : m == MENU_CLIENT_SUB ? g->menu_sub_of : m;
+}
+
+/* menu m's name in the bar */
+static const char *menu_name(const struct gui_state *g, int m) {
+    const struct win_menu_item *c;
+    int count, t;
+    if(m >= MENU_CLIENT) {
+        t = client_title_entry(g, m - MENU_CLIENT, &c, &count);
+        return t >= 0 ? c[t].label : "";
+    }
+    return m >= 1 && m <= MENUS ? menu_names[m - 1] : "";
+}
+
+/* a program's menu that is greyed whole */
+static bool menu_greyed(const struct gui_state *g, int m) {
+    const struct win_menu_item *c;
+    int count, t = m >= MENU_CLIENT ? client_title_entry(g, m - MENU_CLIENT, &c, &count) : -1;
+    return t >= 0 && (c[t].flags & WIN_MENU_DISABLED);
+}
+
+static int title_w(const struct gui_state *g, int m) { return gd_cells(menu_name(g, m)) * 8 + 24; }
+
+#define ITEM(l, k, a, e) do { if(count < MENU_MAX) { it[count].label = (l); it[count].keys = (k); it[count].act = (a); \
+                              it[count].on = (e); it[count].sub = false; it[count].mark = 0; count++; } } while(0)
+#define SEPARATOR() do { if(count < MENU_MAX) { it[count].label = NULL; it[count].keys = ""; it[count].act = ACT_NONE; \
+                         it[count].on = false; it[count].sub = false; it[count].mark = 0; count++; } } while(0)
+
+/* 11/05/26: the registry's programs that show in Apps > Programs (the desktop's own applications are in Apps) */
+static int program_items(const struct gui_state *g, struct menu_item *it, int count) {
+    int i, k;
+    for(i = 0; i < g->reg.count; i++) {
+        k = g->reg.by[i];
+        if(g->reg.e[k].apps && g->reg.e[k].app < 0) ITEM(g->reg.e[k].title, "", ACT_REG_START + k, true);
+    }
+    return count;
+}
+
+/* 11/05/26: how many Apps > Programs lists */
+static int programs_count(const struct gui_state *g) {
+    int i, n = 0;
+    for(i = 0; i < g->reg.count; i++) if(g->reg.e[i].apps && g->reg.e[i].app < 0) n++;
+    return n;
+}
+
+/* 11/05/26: Files' selected file, its name; NULL when no file is selected */
+static const char *files_file(const struct gui_state *g) {
+    const struct gui_files *f = &g->files;
+    return g->focus == GUI_FILES && f->selected > 0 && f->selected < f->count && f->node[f->selected].type == GUI_FILE ?
+           f->node[f->selected].name : NULL;
+}
+
+/* 11/05/26: File > Open with: every program that takes the selected file (its types or open-with name its type),
+   then the desktop's own: the Image Viewer for what it reads (but when a program listed is the one it starts),
+   Notepad and Hex */
+static int open_with_items(const struct gui_state *g, struct menu_item *it, int count) {
+    const char *name = files_file(g);
+    bool viewer = name && viewer_takes(name);
+    int i, k, listed = 0;
+    for(i = 0; name && i < g->reg.count; i++) {
+        k = g->reg.by[i];
+        if(!reg_takes(&g->reg.e[k], name, true)) continue;
+        if(g->reg.e[k].app == GUI_VIEWER) viewer = false;
+        ITEM(g->reg.e[k].title, reg_takes(&g->reg.e[k], name, false) ? "Enter" : "", ACT_REG_OPEN + k, true);
+        listed++;
+    }
+    if(listed) SEPARATOR();
+    if(viewer) ITEM(gui_app_of(GUI_VIEWER)->title, "", ACT_WITH_VIEWER, true);
+    ITEM("Notepad", "", ACT_WITH_NOTEPAD, name != NULL);
+    ITEM("Hex", "", ACT_WITH_HEX, name != NULL);
+    return count;
+}
+
+/* 11/05/26: a program's entries from first on, as menu items: its items and separators, as it set them, to the next
+   title (children: to the first entry that is no WIN_MENU_CHILD; else past the children of a SUBMENU item, which
+   opens its submenu); greyed with the whole menu when its title (or the SUBMENU item, for children) is */
+static int client_entries(const struct win_menu_item *m, int n, int first, bool children, bool whole,
+                          struct menu_item *it, int count) {
+    int i;
+    for(i = first; i < n && !(m[i].flags & WIN_MENU_TITLE); i++) {
+        const struct win_menu_item *e = &m[i];
+        if(!(e->flags & WIN_MENU_CHILD) != !children) {
+            if(children) break;
+            continue;
+        }
+        if(e->flags & WIN_MENU_SEPARATOR) { SEPARATOR(); continue; }
+        ITEM(e->label, e->keys, ACT_CLIENT_MENU + i, whole && !(e->flags & WIN_MENU_DISABLED));
+        if(count && it[count - 1].act == ACT_CLIENT_MENU + i) {
+            it[count - 1].mark = (e->flags & WIN_MENU_RADIO) ? 'o' : (e->flags & WIN_MENU_CHECKED) ? 'v' : 0;
+            it[count - 1].sub = (e->flags & WIN_MENU_SUBMENU) != 0;
+        }
+    }
+    return count;
+}
+
+/* the focused program's k-th menu in the bar */
+static int client_items(const struct gui_state *g, int k, struct menu_item *it, int count) {
+    const struct win_menu_item *m;
+    int n, t = client_title_entry(g, k, &m, &n);
+    return t < 0 ? count : client_entries(m, n, t + 1, false, !(m[t].flags & WIN_MENU_DISABLED), it, count);
+}
+
+/* the submenu open now (MENU_CLIENT_SUB): the children of the program's entry g->menu_sub, when that is still an
+   item with one */
+static int client_sub_items(const struct gui_state *g, struct menu_item *it, int count) {
+    const struct win_menu_item *m = NULL;
+    int n = 0, i, title = -1;
+    if(g->menu_sub_of == 6) client_help_entry(g, &m, &n);
+    else if(g->menu_sub_of >= MENU_CLIENT) client_title_entry(g, g->menu_sub_of - MENU_CLIENT, &m, &n);
+    if(!m || g->menu_sub < 0 || g->menu_sub >= n || !(m[g->menu_sub].flags & WIN_MENU_SUBMENU)) return count;
+    for(i = 0; i < g->menu_sub; i++) if(m[i].flags & WIN_MENU_TITLE) title = i;
+    if(title < 0) return count;
+    return client_entries(m, n, g->menu_sub + 1, true,
+                          !(m[title].flags & WIN_MENU_DISABLED) && !(m[g->menu_sub].flags & WIN_MENU_DISABLED), it, count);
+}
+
 static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
     const struct gui_note *n = &g->note;
     bool note = g->focus == GUI_NOTEPAD, sel = note && note_has_selection(n), files = g->fs != NULL, any = false;
     int count = 0, i, id;
-#define ITEM(l, k, a, e) do { it[count].label = (l); it[count].keys = (k); it[count].act = (a); it[count].on = (e); count++; } while(0)
-#define SEPARATOR() do { it[count].label = NULL; it[count].keys = ""; it[count].act = ACT_NONE; it[count].on = false; count++; } while(0)
     for(i = 0; i < GUI_SLOTS; i++) if(g->win[i].open) any = true;
+    if(m == MENU_PROGRAMS) return program_items(g, it, 0);         /* 11/05/26 */
+    if(m == MENU_OPEN_WITH) return open_with_items(g, it, 0);
+    if(m == MENU_CLIENT_SUB) return client_sub_items(g, it, 0);
+    if(m >= MENU_CLIENT) return client_items(g, m - MENU_CLIENT, it, 0);
     switch(m) {
     case 1:
         ITEM("About SurfOS", "", ACT_ABOUT, true);
         ITEM("Pointer & desktop", "Ctrl+P", ACT_SETTINGS, true);
         ITEM("Ocean / dusk colors", "", ACT_THEME, true);
+        ITEM("Screenshot", "PrtSc", ACT_SCREENSHOT, files);    /* 11/05/26: for keyboards without the key */
         SEPARATOR();
         ITEM("Return to shell", "Ctrl+Q", ACT_QUIT, true);
         break;
     case 2:
         if(g->focus == GUI_FILES) {                     /* Files in front: its commands, for the keyboard too */
             ITEM("Open selected", "Enter", ACT_FILES_OPEN, files_can(g, ACT_FILES_OPEN));
+            ITEM("Open with", "", ACT_OPEN_WITH, files_file(g) != NULL);     /* 11/05/26: a menu of its own */
+            if(count) it[count - 1].sub = true;
             ITEM("New file\xF9", "", ACT_FILES_NEW_FILE, files_can(g, ACT_FILES_NEW_FILE));
             ITEM("New folder\xF9", "", ACT_FILES_NEW_FOLDER, files_can(g, ACT_FILES_NEW_FOLDER));
             ITEM("Rename\xF9", "", ACT_FILES_RENAME, files_can(g, ACT_FILES_RENAME));
@@ -519,6 +698,10 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
         for(i = 0; i < SUITE; i++) ITEM(suite[i]->title, suite[i]->shortcut, ACT_WINDOW + GUI_FIRST_APP + i, true);
         SEPARATOR();                                    /* 10/25/26: the launcher (the last item a 640x400 screen has */
         ITEM("Run program\xF9", "", ACT_RUN, g->sys && g->sys->run);    /* room for in this menu) */
+        if(programs_count(g) > 0) {                     /* 11/05/26: the registry's programs, a menu of their own */
+            ITEM("Programs", "", ACT_PROGRAMS, true);   /* (after Run program..., which keeps its place: the menu */
+            if(count) it[count - 1].sub = true;         /* scrolls on a 640x400 screen) */
+        }
         break;
     case 5:
         ITEM("Next window", note ? "" : "Tab", ACT_NEXT_WINDOW, any);   /* in Notepad, Tab is a tab */
@@ -532,24 +715,38 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
                                      g->focus == id ? "\x10" : g->win[id].min ? "hidden" : "", ACT_WINDOW + id, true);
         break;
     case 6:
+        {                                               /* 11/05/26: a program's Help first, then the desktop's */
+            const struct win_menu_item *c;
+            int cn, t = client_help_entry(g, &c, &cn);
+            if(t >= 0) {
+                count = client_entries(c, cn, t + 1, false, !(c[t].flags & WIN_MENU_DISABLED), it, count);
+                SEPARATOR();
+            }
+        }
         ITEM("Keyboard and mouse", "", ACT_HELP, true);
         ITEM("About SurfOS", "", ACT_ABOUT, true);
         break;
     }
-#undef ITEM
-#undef SEPARATOR
     return count;
 }
+#undef ITEM
+#undef SEPARATOR
 
-static int menu_left(int m) {
-    int x = 8, i;
-    for(i = 1; i < m; i++) x += (int)strlen(menu_names[i - 1]) * 8 + 24;
+/* the x of menu m's title in the bar (a menu an item opens: its parent's) */
+static int menu_left(const struct gui_state *g, int m) {
+    int b[BAR_MAX], n = bar(g, b), x = 8, i;
+    m = bar_parent(g, m);
+    for(i = 0; i < n && b[i] != m; i++) x += title_w(g, b[i]);
     return x;
 }
 
-static int menu_at(int x) {
-    int m;
-    for(m = 1; m <= MENUS; m++) if(x >= menu_left(m) - 4 && x < menu_left(m + 1) - 4) return m;
+/* the bar's menu whose title is at x, 0 */
+static int menu_at(const struct gui_state *g, int x) {
+    int b[BAR_MAX], n = bar(g, b), left = 8, i;
+    for(i = 0; i < n; i++) {
+        if(x >= left - 4 && x < left + title_w(g, b[i]) - 4) return b[i];
+        left += title_w(g, b[i]);
+    }
     return 0;
 }
 
@@ -557,39 +754,71 @@ static int menu_width(const struct menu_item *it, int n) {
     int w = 184, i, k;
     for(i = 0; i < n; i++) {
         if(!it[i].label) continue;
-        k = (int)(strlen(it[i].label) + strlen(it[i].keys)) * 8 + 64;
+        k = (gd_cells(it[i].label) + gd_cells(it[i].keys)) * 8 + 64 + (it[i].sub ? 16 : 0);
         if(k > w) w = k;
     }
     return w;
 }
 
-/* 10/26/26: an item's top, below the menu's top (MENU_H for the bar's) */
-static int item_top(const struct menu_item *it, int i, int top) {
-    int y = top + 4, k;
-    for(k = 0; k < i; k++) y += it[k].label ? 24 : 9;
+static int entry_h(const struct menu_item *e) { return e->label ? 24 : 9; }
+
+/* 11/05/26: where an open menu is and which of its entries show: its box x, y, w, h; entries first to end - 1 from
+   rows down; a menu taller than the room below its top (the screen's bottom for the bar's, the taskbar for a
+   right-click's) shows what fits, under a strip of up arrows while some are hidden above (up) and over one of down
+   arrows while some are below (down) */
+#define STRIP 14
+struct menu_box { int x, y, w, h, first, end, rows; bool up, down; };
+
+static void menu_box_of(const struct gui_state *g, int m, const struct menu_item *it, int n, struct menu_box *b) {
+    int full = 8, i, room, limit, at;
+    for(i = 0; i < n; i++) full += entry_h(&it[i]);
+    b->w = menu_width(it, n);
+    b->x = gui_clamp(menu_left(g, m) - 4, 0, g->width - b->w > 0 ? g->width - b->w : 0);
+    b->y = MENU_H;
+    room = g->height - MENU_H;
+    if(m == g->menu && g->menu_y) {                     /* 10/26/26 (stage C8): where a right-click opened it */
+        room = g->height - TASK_H - MENU_H;
+        b->x = gui_clamp(g->menu_x, 0, g->width - b->w > 0 ? g->width - b->w : 0);
+        b->y = gui_clamp(g->menu_y, MENU_H, g->height - TASK_H - full > MENU_H ? g->height - TASK_H - full : MENU_H);
+    }
+    b->first = 0;
+    b->end = n;
+    b->up = b->down = false;
+    b->h = full;
+    b->rows = b->y + 4;
+    if(full <= room || n == 0) return;
+    b->h = room;
+    b->first = m == g->menu ? gui_clamp(g->menu_top, 0, n - 1) : 0;
+    b->up = b->first > 0;
+    b->rows = b->y + 4 + (b->up ? STRIP : 0);
+    for(limit = b->y + b->h - 4, at = b->rows, i = b->first; i < n && at + entry_h(&it[i]) <= limit; i++)
+        at += entry_h(&it[i]);
+    if(i < n) {                                         /* some below: room for their strip too */
+        for(limit -= STRIP, at = b->rows, i = b->first; i < n && at + entry_h(&it[i]) <= limit; i++)
+            at += entry_h(&it[i]);
+        b->down = true;
+    }
+    b->end = i > b->first ? i : b->first + 1;
+}
+
+/* entry i's top in box b */
+static int entry_top(const struct menu_box *b, const struct menu_item *it, int i) {
+    int y = b->rows, k;
+    for(k = b->first; k < i; k++) y += entry_h(&it[k]);
     return y;
 }
 
-/* 10/26/26 (stage C8): menu m's box of n items: under its title on the bar, or, opened by a right-click, from where
-   it was, kept on the screen above the taskbar */
-static void menu_place(const struct gui_state *g, int m, const struct menu_item *it, int n, int *x, int *y, int *w,
-                       int *h) {
-    *w = menu_width(it, n);
-    *h = item_top(it, n, 0) + 4;
-    *x = menu_left(m) - 4;
-    *y = MENU_H;
-    if(m != g->menu || !g->menu_y) return;
-    *x = gui_clamp(g->menu_x, 0, g->width - *w > 0 ? g->width - *w : 0);
-    *y = gui_clamp(g->menu_y, MENU_H, g->height - TASK_H - *h > MENU_H ? g->height - TASK_H - *h : MENU_H);
-}
-
-/* the item under x, y of the open menu: its number, or -1 */
+/* the entry under x, y of the open menu: its number; -1 for none, -2 and -3 for the up and the down strips */
 static int menu_hit(const struct gui_state *g, int x, int y) {
     struct menu_item it[MENU_MAX];
-    int n = menu_items(g, g->menu, it), left, top, w, h, i;
-    menu_place(g, g->menu, it, n, &left, &top, &w, &h);
-    if(x < left || x >= left + w) return -1;
-    for(i = 0; i < n; i++) if(it[i].label && y >= item_top(it, i, top) && y < item_top(it, i, top) + 24) return i;
+    struct menu_box b;
+    int n = menu_items(g, g->menu, it), i;
+    menu_box_of(g, g->menu, it, n, &b);
+    if(x < b.x || x >= b.x + b.w || y < b.y || y >= b.y + b.h) return -1;
+    if(b.up && y < b.rows) return -2;
+    if(b.down && y >= b.y + b.h - 4 - STRIP) return -3;
+    for(i = b.first; i < b.end; i++)
+        if(it[i].label && y >= entry_top(&b, it, i) && y < entry_top(&b, it, i) + 24) return i;
     return -1;
 }
 
@@ -603,8 +832,13 @@ bool gui_menu_on(const struct gui_state *g, int m, int act) {
 
 void gui_menu_box(const struct gui_state *g, int m, int *x, int *y, int *w, int *h) {
     struct menu_item it[MENU_MAX];
+    struct menu_box b;
     int n = menu_items(g, m, it);
-    menu_place(g, m, it, n, x, y, w, h);              /* 10/26/26: where a right-click opened it, when it did */
+    menu_box_of(g, m, it, n, &b);                       /* 10/26/26: where a right-click opened it, when it did */
+    *x = b.x;
+    *y = b.y;
+    *w = b.w;
+    *h = b.h;
 }
 
 static int menu_step(const struct menu_item *it, int n, int from, int step) {
@@ -616,41 +850,120 @@ static int menu_step(const struct menu_item *it, int n, int from, int step) {
     return from;
 }
 
+/* 11/05/26: the open menu scrolled so that its selection shows */
+static void menu_reveal(struct gui_state *g) {
+    struct menu_item it[MENU_MAX];
+    struct menu_box b;
+    int n = menu_items(g, g->menu, it), k;
+    for(k = 0; k < n; k++) {
+        menu_box_of(g, g->menu, it, n, &b);
+        if(g->selection < b.first) g->menu_top = g->selection;
+        else if(g->selection >= b.end && g->menu_top < n - 1) g->menu_top++;
+        else break;
+    }
+}
+
 static void menu_open(struct gui_state *g, int m) {
     struct menu_item it[MENU_MAX];
     int n;
     g->menu = m;
     g->menu_y = 0;                                      /* 10/26/26: under its title (context_press() moves it) */
+    g->menu_top = 0;                                    /* 11/05/26 */
     g->selection = 0;
     if(m) {
         n = menu_items(g, m, it);
-        g->selection = it[0].label && it[0].on ? 0 : menu_step(it, n, 0, 1);
+        g->selection = n && it[0].label && it[0].on ? 0 : menu_step(it, n, 0, 1);
     }
     g->dirty = true;
 }
 
-/* 10/26/26: a right-click menu whose window no longer has the focus (it acts on the focus) */
+/* 11/05/26: the menu an item opens (Programs, Open with), where its parent menu was (under the bar's title, or where a
+   right-click opened it) */
+static void menu_child(struct gui_state *g, int child) {
+    int x = g->menu_x, y = g->menu_y, win = g->menu_win;
+    menu_open(g, child);
+    if(y) {
+        g->menu_x = x;
+        g->menu_y = y;
+        g->menu_win = win;
+    }
+}
+
+/* 10/26/26: a right-click menu whose window no longer has the focus (it acts on the focus); 11/05/26: and a menu the
+   bar no longer has (the focus left the program whose menus it showed, or came to one that has its own), or a
+   program's that is gone */
 static bool menu_stale(const struct gui_state *g) {
-    return g->menu && g->menu_y && g->menu_win >= 0 &&
-           (g->focus != g->menu_win || !g->win[g->menu_win].open || g->win[g->menu_win].min);
+    const struct win_menu_item *c;
+    struct menu_item it[MENU_MAX];
+    int b[BAR_MAX], n, i, count;
+    if(g->menu && g->menu_y && g->menu_win >= 0 &&
+       (g->focus != g->menu_win || !g->win[g->menu_win].open || g->win[g->menu_win].min)) return true;
+    if(g->menu >= MENU_CLIENT && client_title_entry(g, g->menu - MENU_CLIENT, &c, &count) < 0) return true;
+    if(g->menu == MENU_CLIENT_SUB && !client_sub_items(g, it, 0)) return true;     /* its item is gone */
+    if(g->menu == MENU_OPEN_WITH && g->focus != GUI_FILES) return true;
+    if(!g->menu || g->menu_y) return false;
+    n = bar(g, b);
+    for(i = 0; i < n && b[i] != bar_parent(g, g->menu); i++) ;
+    return i == n;
 }
 
 static void menu_run(struct gui_state *g, int i) {
     struct menu_item it[MENU_MAX];
     int n = menu_items(g, g->menu, it);
     bool stale = menu_stale(g);                         /* 10/26/26: never on another window */
+    if(!stale && i >= 0 && i < n && it[i].label && it[i].on && it[i].sub) {    /* 11/05/26: its menu opens */
+        if(it[i].act >= ACT_CLIENT_MENU && it[i].act < ACT_CLIENT_MENU + WIN_MENU_ENTRIES) {
+            g->menu_sub = it[i].act - ACT_CLIENT_MENU;  /* a program's submenu, one level deep */
+            g->menu_sub_of = g->menu;
+            menu_child(g, MENU_CLIENT_SUB);
+        } else menu_child(g, it[i].act == ACT_PROGRAMS ? MENU_PROGRAMS : MENU_OPEN_WITH);
+        return;
+    }
     g->menu = 0;
     g->dirty = true;
     if(!stale && i >= 0 && i < n && it[i].label && it[i].on) gui_act(g, it[i].act);
+}
+
+/* 11/05/26: Left and Right: the bar's menu before or after this one's; Left in a menu an item opened goes back to it,
+   its item selected */
+static void menu_side(struct gui_state *g, int step) {
+    struct menu_item it[MENU_MAX];
+    int b[BAR_MAX], n = bar(g, b), i, child = g->menu, parent = bar_parent(g, g->menu), k;
+    if(child != parent && step < 0) {
+        int act = child == MENU_PROGRAMS ? ACT_PROGRAMS : child == MENU_OPEN_WITH ? ACT_OPEN_WITH : ACT_CLIENT_MENU + g->menu_sub;
+        menu_child(g, parent);
+        k = menu_items(g, parent, it);
+        for(i = 0; i < k; i++) if(it[i].sub && it[i].act == act) g->selection = i;
+        menu_reveal(g);
+        return;
+    }
+    for(i = 0; i < n && b[i] != parent; i++) ;
+    if(i == n) i = 0;
+    menu_open(g, b[(i + step + n) % n]);
 }
 
 static void menu_key(struct gui_state *g, int key) {
     struct menu_item it[MENU_MAX];
     int n = menu_items(g, g->menu, it);
     if(key == 27) g->menu = 0;
-    else if(key == GUI_UP || key == GUI_DOWN) g->selection = menu_step(it, n, g->selection, key == GUI_UP ? -1 : 1);
-    else if(key == GUI_LEFT || key == GUI_RIGHT) menu_open(g, (g->menu + (key == GUI_RIGHT ? 0 : MENUS - 2)) % MENUS + 1);
+    else if(key == GUI_UP || key == GUI_DOWN) {
+        g->selection = menu_step(it, n, g->selection, key == GUI_UP ? -1 : 1);
+        menu_reveal(g);
+    } else if(key == GUI_RIGHT && g->selection >= 0 && g->selection < n && it[g->selection].sub && it[g->selection].on)
+        menu_run(g, g->selection);                      /* 11/05/26: into the menu it opens */
+    else if(key == GUI_LEFT || key == GUI_RIGHT) menu_side(g, key == GUI_RIGHT ? 1 : -1);
     else if(key == '\r' || key == '\n' || key == ' ') { menu_run(g, g->selection); return; }
+    g->dirty = true;
+}
+
+/* 11/05/26: the wheel over an open menu that scrolls; and a press on its strips */
+static void menu_scroll(struct gui_state *g, int step) {
+    struct menu_item it[MENU_MAX];
+    struct menu_box b;
+    int n = menu_items(g, g->menu, it);
+    menu_box_of(g, g->menu, it, n, &b);
+    if(!b.up && !b.down) return;
+    if((step < 0 && b.up) || (step > 0 && b.down)) g->menu_top = gui_clamp(b.first + step, 0, n - 1);
     g->dirty = true;
 }
 
@@ -737,21 +1050,176 @@ void gui_request_quit(struct gui_state *g) {
     if(gui_guard(g, PEND_QUIT, NULL)) g->quit = true;
 }
 
+/**** 11/05/26 (track desk): the clipboard's changes, the theme, the preferences, screenshots ****/
+
+void gui_clipped(struct gui_state *g, u32 len) {
+    g->clip_len = len;
+    g->clip_serial++;
+}
+
+/* the colours by role (surfos/win.h's WIN_COLOR_*) the desktop draws its own windows in; the theme changes the desktop
+   behind them */
+void gui_theme_colors(const struct gui_state *g, u32 *c) {
+    c[WIN_COLOR_DESKTOP] = g->night ? 0x142638 : 0x245A67;
+    c[WIN_COLOR_WINDOW] = PAPER;
+    c[WIN_COLOR_TEXT] = INK;
+    c[WIN_COLOR_MUTED] = MUTED;
+    c[WIN_COLOR_ACCENT] = TEAL;
+    c[WIN_COLOR_ON_ACCENT] = PAPER;
+    c[WIN_COLOR_BAND] = BAND;
+    c[WIN_COLOR_BUTTON] = SHELL;
+    c[WIN_COLOR_LINE] = LINE;
+    c[WIN_COLOR_SELECTION] = PICK;
+    c[WIN_COLOR_FIELD] = 0xFFFDF5;
+    c[WIN_COLOR_FRAME] = INK;
+    c[WIN_COLOR_DARK] = NAVY;
+    c[WIN_COLOR_LIGHT] = FOAM;
+    c[WIN_COLOR_WARN] = CORAL;
+    c[WIN_COLOR_DISABLED] = 0xA3B4B3;
+}
+
+/* the preferences in the settings, read each second: a change (Settings', or the stick's at the start) applies here
+   at once; one the desktop made itself reads back the same */
+static void prefs_tick(struct gui_state *g) {
+    int theme, speed;
+    if(!g->sys || !g->sys->prefs || (g->pref_theme >= 0 && g->now - g->pref_at < 1000)) return;
+    g->pref_at = g->now;
+    if(g->sys->prefs(g->sys->ctx, &theme, &speed) < 0) return;
+    if(theme != g->pref_theme && g->night != (theme == 1)) {   /* drawn again only for what changes */
+        g->night = theme == 1;
+        g->dirty = true;
+    }
+    if(speed != g->pref_speed && speed >= 1 && speed <= 3 && g->speed != speed) {
+        g->speed = speed;
+        g->dirty = true;
+    }
+    g->pref_theme = theme;
+    g->pref_speed = speed;
+}
+
+/* Pointer & desktop changed one (which 0: the theme, 1: the speed): in force here at once (the caller set it); 11/05/26
+   (the review of stage 2) written into the settings once it has stood GUI_PREF_MS, or at the desktop's end, so that a
+   run of clicks writes the stick once, and the desktop's pass never waits on the stick for each */
+static void pref_save(struct gui_state *g, int which) {
+    g->pref_pending |= 1u << which;
+    g->pref_changed = g->now;
+    strlcpy(g->pref_status, "Kept in the settings in a moment.", sizeof(g->pref_status));
+    g->dirty = true;
+}
+
+/* what waits written into the settings (the values in force now), and the status says so */
+static void pref_flush(struct gui_state *g) {
+    char msg[GUI_STATUS];
+    int which, r;
+    for(which = 0; which < 2; which++) {
+        if(!(g->pref_pending & (1u << which))) continue;
+        g->pref_pending &= ~(1u << which);
+        if(!g->sys || !g->sys->pref_set) continue;
+        msg[0] = 0;
+        r = g->sys->pref_set(g->sys->ctx, which, which ? g->speed : g->night, msg, sizeof(msg));
+        if(r == 0) strlcpy(g->pref_status, "Saved in the settings on the stick.", sizeof(g->pref_status));
+        else snprintf(g->pref_status, sizeof(g->pref_status), "%s%s", r > 0 ? "For now, not saved: " : "Not changed: ",
+                      msg[0] ? msg : "no settings stick");
+    }
+    g->dirty = true;
+}
+
+/* the first volume mounted that may be written (a stick's), else / */
+void gui_volume_dir(struct gui_state *g, char *out, size_t n) {
+    int k, count = g->fs && g->fs->volumes ? g->fs->volumes(g->fs->ctx, g->vols, GUI_VOLUMES) : 0;
+    strlcpy(out, "/", n);
+    for(k = 0; k < count && k < GUI_VOLUMES; k++)
+        if(g->vols[k].path[0] && !g->vols[k].readonly && !g->vols[k].gone) {
+            strlcpy(out, g->vols[k].path, n);
+            return;
+        }
+}
+
+/* a screenshot asked for (SurfOS > Screenshot, Print Screen): its name now, the frame captured by the shell next */
+void gui_screenshot(struct gui_state *g) {
+    const struct gui_time *t = &g->time;
+    if(!g->fs || g->shot.state != GUI_SHOT_NONE) return;
+    if(t->year) snprintf(g->shot.name, sizeof(g->shot.name), "Screenshot %04u-%02u-%02u %02u%02u%02u.bmp", t->year,
+                         t->month, t->date, t->hour, t->minute, t->second);
+    else strlcpy(g->shot.name, "Screenshot.bmp", sizeof(g->shot.name));
+    g->shot.state = GUI_SHOT_WANTED;
+    g->dirty = true;
+}
+
+/* a screenshot captured: the Save as chooser, once no other dialog is up */
+static void shot_ask(struct gui_state *g) {
+    char dir[GUI_PATH_MAX];
+    if(g->shot.state != GUI_SHOT_TAKEN || g->dialog.kind) return;
+    if(!g->fs || !g->shot.data) {
+        g->shot.state = GUI_SHOT_DONE;
+        dialog_message(g, "No screenshot", "There was no memory for the picture.", "");
+        return;
+    }
+    gui_volume_dir(g, dir, sizeof(dir));
+    dialog_chooser_for(g, GUI_DLG_SAVE, ACT_DLG_SHOT, "Save the screenshot", dir, g->shot.name, "bmp");
+    g->shot.state = GUI_SHOT_ASKING;
+}
+
+static void shot_save(struct gui_state *g, const char *path) {
+    char kept[GUI_PATH_MAX], line[80];
+    int r = g->fs->write(g->fs->ctx, path, g->shot.data, g->shot.len, false, kept, sizeof(kept));
+    g->shot.state = GUI_SHOT_DONE;
+    if(r == 0) {
+        if(g->win[GUI_FILES].open) files_refresh(g);
+        return;
+    }
+    if(kept[0]) note_remember(g, path, kept);           /* a rename that may have half happened: both taken care of */
+    snprintf(line, sizeof(line), "%s: %s", gui_basename(path), gui_error(g, r));
+    dialog_message(g, "Screenshot not saved", line, kept[0] ? "Its new file is kept beside it." : "");
+}
+
+/* the chooser's answer: a file that is not there is saved; one that is asks first, unless the desktop takes care of
+   it (Notepad's Save as's rules) */
+static void shot_answer(struct gui_state *g, int act, int button, const char *text, const char *target) {
+    struct gui_entry e;
+    bool device, readonly;
+    char line[80];
+    if(g->shot.state != GUI_SHOT_ASKING) return;
+    if(button != 0 || !g->fs) { g->shot.state = GUI_SHOT_DONE; return; }
+    if(act == ACT_DLG_SHOT_REPLACE) { shot_save(g, target); return; }
+    if(g->fs->stat(g->fs->ctx, text, &e, &device, &readonly) == 0) {
+        snprintf(line, sizeof(line), "%s is there already.", gui_basename(text));
+        if(e.type == GUI_DIR || device) dialog_message(g, "Screenshot not saved", line, "It is not a file that can be replaced.");
+        else if(note_guarded(g, text)) {
+            gui_unsure_line(g, text, line, sizeof(line));
+            dialog_message(g, "Screenshot not saved", line, "Have the disk checked first (fsck).");
+        } else {
+            dialog_confirm(g, ACT_DLG_SHOT_REPLACE, "Replace the file?", line, "Saving replaces what it holds.",
+                           "Replace", NULL, "Cancel");
+            strlcpy(g->dialog.target, text, sizeof(g->dialog.target));
+            return;
+        }
+        g->shot.state = GUI_SHOT_DONE;
+        return;
+    }
+    shot_save(g, text);
+}
+
 void gui_tick(struct gui_state *g) {
     int id;
+    if(!g->reg.loaded) reg_load(g);                     /* 11/05/26: the registry, when the desktop starts */
+    if(g->pref_pending && g->now - g->pref_changed >= GUI_PREF_MS) pref_flush(g);  /* a change that stood */
+    prefs_tick(g);                                      /* 11/05/26: the preferences, each second */
     for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
         if(g->win[id].open && gui_app_of(id)->tick) gui_app_of(id)->tick(g);
     client_tick(g);                                     /* 10/25/26: programs' windows */
     if(menu_stale(g)) { g->menu = 0; g->dirty = true; } /* 10/26/26: its window lost the focus */
 }
 
-/* 10/26/26 (stage C12): what waits for a pass's input to be in */
+/* 10/26/26 (stage C12): what waits for a pass's input to be in; 11/05/26: and a screenshot's chooser */
 void gui_input_done(struct gui_state *g) {
     client_alerts(g);
+    shot_ask(g);
 }
 
 void gui_finish(struct gui_state *g) {
     int id;
+    if(g->pref_pending) pref_flush(g);                  /* 11/05/26: a change not written yet */
     for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
         if(g->win[id].open && gui_app_of(id)->closed) gui_app_of(id)->closed(g);
     client_finish(g);                                   /* 10/25/26: programs' windows let go */
@@ -773,6 +1241,19 @@ void gui_act(struct gui_state *g, int act) {
     bool note = g->focus == GUI_NOTEPAD && g->win[GUI_NOTEPAD].open;
     g->dirty = true;
     if(act >= ACT_WINDOW && act < ACT_WINDOW + GUI_SLOTS) { gui_open(g, act - ACT_WINDOW); return; }
+    if(act >= ACT_CLIENT_MENU && act < ACT_CLIENT_MENU + WIN_MENU_ENTRIES) {     /* 11/05/26: a program's item */
+        client_menu_chosen(g, act - ACT_CLIENT_MENU);
+        return;
+    }
+    if(act >= ACT_REG_START && act < ACT_REG_START + GUI_REG_MAX) { reg_start(g, act - ACT_REG_START); return; }
+    if((act >= ACT_REG_OPEN && act < ACT_REG_OPEN + GUI_REG_MAX) || (act >= ACT_WITH_NOTEPAD && act <= ACT_WITH_VIEWER)) {
+        if(!files_file(g) || !files_path(g, g->files.selected, dir, sizeof(dir))) return;   /* Open with's */
+        if(act == ACT_WITH_NOTEPAD) { if(gui_guard(g, PEND_OPEN_PATH, dir) && note_load(g, dir) == 0) gui_open(g, GUI_NOTEPAD); }
+        else if(act == ACT_WITH_HEX) hex_show(g, dir);
+        else if(act == ACT_WITH_VIEWER) viewer_show(g, dir);
+        else reg_open(g, act - ACT_REG_OPEN, dir);
+        return;
+    }
     if(act >= ACT_FILES_OPEN && act <= ACT_FILES_EJECT) { files_act(g, act); return; }
     if(act >= ACT_UNDO && act <= ACT_GOTO && edit_app(g)) {    /* 10/17/26: the focused application's Edit menu */
         if(edit_app(g)->can_edit(g, act)) edit_app(g)->edit(g, act);
@@ -781,7 +1262,10 @@ void gui_act(struct gui_state *g, int act) {
     switch(act) {
     case ACT_ABOUT: gui_open(g, GUI_ABOUT); break;
     case ACT_SETTINGS: gui_open(g, GUI_SETTINGS); break;
-    case ACT_THEME: g->night = !g->night; break;
+    case ACT_THEME: g->night = !g->night; pref_save(g, 0); break;   /* 11/05/26: and kept */
+    case ACT_SCREENSHOT: gui_screenshot(g); break;     /* 11/05/26 */
+    case ACT_PROGRAMS: menu_child(g, MENU_PROGRAMS); break;
+    case ACT_OPEN_WITH: if(files_file(g)) menu_child(g, MENU_OPEN_WITH); break;
     case ACT_QUIT: gui_request_quit(g); break;
     case ACT_NEW: if(gui_guard(g, PEND_NEW, NULL)) { note_reset(n); gui_open(g, GUI_NOTEPAD); } break;
     case ACT_OPEN:
@@ -893,6 +1377,11 @@ void gui_answer(struct gui_state *g, int act, int button, const char *text, cons
         client_answer(g, act - ACT_CLIENT_END, button, target);
         return;
     }
+    if(act >= ACT_CLIENT_DIALOG && act < ACT_CLIENT_REPLACE + GUI_CLIENTS) {     /* 11/05/26: a program's chooser */
+        client_chooser_answer(g, (act - ACT_CLIENT_DIALOG) % GUI_CLIENTS, act, button, text, target);
+        return;
+    }
+    if(act == ACT_DLG_SHOT || act == ACT_DLG_SHOT_REPLACE) { shot_answer(g, act, button, text, target); return; }
     if(act == ACT_DLG_LEAVE) {
         if(button == 0 && gui_guard(g, PEND_QUIT, NULL)) g->quit = true;
         return;
@@ -1008,9 +1497,10 @@ static void context_press(struct gui_state *g) {
 /* 10/26/26: x, y in the open menu's box */
 static bool in_menu(const struct gui_state *g, int x, int y) {
     struct menu_item it[MENU_MAX];
-    int n = menu_items(g, g->menu, it), mx, my, mw, mh;
-    menu_place(g, g->menu, it, n, &mx, &my, &mw, &mh);
-    return gui_inside(x, y, mx, my, mw, mh);
+    struct menu_box b;
+    int n = menu_items(g, g->menu, it);
+    menu_box_of(g, g->menu, it, n, &b);
+    return gui_inside(x, y, b.x, b.y, b.w, b.h);
 }
 
 /* Help's text rows, its last useful first row, and its scroll bar (above the resize grip) */
@@ -1057,9 +1547,9 @@ static void content_press(struct gui_state *g, int id, int x, int y) {
     }
     if(id==GUI_ABOUT && gui_inside(x,y,16,166,4*102-8,34) && (x-16)%102<94)
         gui_act(g,tiles[(x-16)/102].app==GUI_FILES?ACT_FILES:ACT_WINDOW+tiles[(x-16)/102].app);
-    if(id==GUI_SETTINGS) {
-        if(gui_inside(x,y,16,100,3*112,30)) g->speed=(x-16)/112+1;
-        if(gui_inside(x,y,16,172,176,32)) g->night=!g->night;
+    if(id==GUI_SETTINGS) {                              /* 11/05/26: each change kept in the settings */
+        if(gui_inside(x,y,16,100,3*112,30)) { g->speed=(x-16)/112+1; pref_save(g,1); }
+        if(gui_inside(x,y,16,172,176,32)) { g->night=!g->night; pref_save(g,0); }
     }
     if(id == GUI_NOTEPAD) note_press(g, x, y);
     if(id == GUI_FILES) files_press(g, x, y);
@@ -1083,7 +1573,8 @@ static void wheel(struct gui_state *g, int dz) {
     int i, id, lines = -dz * 3;                         /* the wheel turned away from the user: up */
     struct gui_window *w;
     if(g->dialog.kind) { dialog_wheel(g, lines); return; }
-    if(g->menu) return;                                 /* 10/26/26 (C8): a menu open drops it */
+    if(g->menu) { menu_scroll(g, lines > 0 ? 1 : -1); return; }   /* 10/26/26 (C8): a menu open drops it (11/05/26:
+                                                                     but one that scrolls) */
     if(g->clients.grab >= 0) { client_wheel(g, g->clients.grab, lines); return; }   /* a program's grab: its own */
     for(i = GUI_SLOTS - 1; i >= 0; i--) {
         id = g->order[i];
@@ -1125,7 +1616,11 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
            g->app_drag<0 && !g->note.selecting && !g->drawing) return;
     }
     if(!(e->buttons&POINTER_LEFT)) gui_release(g);
-    if(g->dialog.kind) { dialog_pointer(g,g->x,g->y,press); return; }
+    if(g->dialog.kind) {                                /* 11/05/26 (the review of stage 2): the dialog's, and no */
+        client_pointer_lost(g);                         /* program's window under it hears a button held */
+        dialog_pointer(g,g->x,g->y,press);
+        return;
+    }
     if(!g->menu && client_grace(g,old)) return;         /* 10/26/26: a press on a window just come up by itself */
     if(client_pointer(g,old)) return;                   /* 10/25/26: a program's: over its content, or held for it */
     if(g->drag>=0) {                                    /* below the menu bar, above the taskbar (as gui_place) */
@@ -1176,17 +1671,18 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
         return;
     }
     if(g->menu && !press) {                             /* the item under the pointer is the one chosen */
-        id=g->y<MENU_H && !g->menu_y?menu_at(g->x):0;   /* 10/26/26: the bar's titles, for the bar's menus */
-        if(id && id!=g->menu) { menu_open(g,id); return; }
+        id=g->y<MENU_H && !g->menu_y?menu_at(g,g->x):0;     /* 10/26/26: the bar's titles, for the bar's menus */
+        if(id && id!=bar_parent(g, g->menu)) { menu_open(g,id); return; }   /* 11/05/26: a menu an item opened stays */
         i=menu_hit(g,g->x,g->y);
         if(i>=0 && i!=g->selection) { g->selection=i; g->dirty=true; }
         return;
     }
     if(!press) return;
-    if(g->y<MENU_H) { id=menu_at(g->x); menu_open(g,g->menu==id && !g->menu_y?0:id); return; }   /* 10/26/26 */
+    if(g->y<MENU_H) { id=menu_at(g,g->x); menu_open(g,bar_parent(g, g->menu)==id && !g->menu_y?0:id); return; }
     if(g->menu) {
         i=menu_hit(g,g->x,g->y);
-        if(i>=0) menu_run(g,i);
+        if(i==-2 || i==-3) menu_scroll(g,i==-2?-1:1);  /* 11/05/26: a strip of a menu that scrolls */
+        else if(i>=0) menu_run(g,i);
         else { g->menu=0; g->dirty=true; }
         return;
     }
@@ -1204,8 +1700,14 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     }
     for(i=0;i<TILES;i++) if(gui_inside(g->x,g->y,24,120+i*52,144,44)) { gui_act(g,tiles[i].app==GUI_FILES?ACT_FILES:ACT_WINDOW+tiles[i].app); return; }
     for(i=0;i<SUITE;i++) {                              /* 10/17/26: the suite's tiles */
-        tile_box(i,&x,&y);
-        if(gui_inside(g->x,g->y,x,y,144,44)) { gui_act(g,ACT_WINDOW+GUI_FIRST_APP+i); return; }
+        tile_box(i,&x,&y);                              /* 11/05/26 (the review of stage 2): those drawn alone */
+        if(x+144<=g->width && gui_inside(g->x,g->y,x,y,144,44)) { gui_act(g,ACT_WINDOW+GUI_FIRST_APP+i); return; }
+    }
+    for(i=0,id=0;i<g->reg.count;i++) {                  /* 11/05/26: the registry's, after them */
+        int k=g->reg.by[i];
+        if(!g->reg.e[k].desktop || g->reg.e[k].app>=0) continue;
+        tile_box(SUITE+id++,&x,&y);
+        if(x+144<=g->width && gui_inside(g->x,g->y,x,y,144,44)) { reg_start(g,k); return; }
     }
 }
 
@@ -1230,17 +1732,81 @@ bool gui_working(const struct gui_state *g) {
 
 /**** keys ****/
 
+/* 11/05/26 (the review): full keys (sys/gui.h). A byte the terminal sent alone: a control byte is Ctrl and its letter
+   (or Ctrl+Space, Ctrl+\ ] ^ _), Tab, Enter, Esc and Backspace themselves; LF, Ctrl+J */
+int gui_byte_key(int b) {
+    if(b == 9 || b == 13 || b == 27 || b == 127) return b;
+    if(b == 0) return ' ' | GUI_KEY_CTRL;
+    if(b >= 1 && b <= 26) return ('a' + b - 1) | GUI_KEY_CTRL;
+    if(b >= 28 && b <= 31) return "\\]^_"[b - 28] | GUI_KEY_CTRL;
+    return b;
+}
+
+/* the end of an escape sequence (ESC [ or ESC O, a number, the final byte; m: xterm's 1 + Shift + 2 Alt + 4 Ctrl,
+   and 16 for a key the keyboard repeats, tty.h): its key, 0 for none. TTY_RAW_KEYS's ESC[c;mu is the character c */
+int gui_sequence_key(int number, int final, int m) {
+    int key = 0, mods = m > 1 && m <= 32 ? m - 1 : 0;
+    switch(final) {
+    case 'A': key = GUI_UP; break;
+    case 'B': key = GUI_DOWN; break;
+    case 'C': key = GUI_RIGHT; break;
+    case 'D': key = GUI_LEFT; break;
+    case 'H': key = GUI_HOME; break;
+    case 'F': key = GUI_END; break;
+    case 'Z': return GUI_BACKTAB | GUI_KEY_SHIFT;       /* Shift+Tab, from a terminal at the serial line's end */
+    case 'u': if(number == 9 || number == 13 || number == 27 || (number >= 32 && number <= 127)) key = number; break;
+    case '~':
+        switch(number) {
+        case 1: case 7: key = GUI_HOME; break;
+        case 2: key = GUI_INSERT; break;
+        case 3: key = GUI_DELETE; break;
+        case 4: case 8: key = GUI_END; break;
+        case 5: key = GUI_PGUP; break;
+        case 6: key = GUI_PGDN; break;
+        case 15: key = GUI_F(5); break;
+        case 17: case 18: case 19: case 20: case 21: key = GUI_F(number - 11); break;
+        case 23: case 24: key = GUI_F(number - 12); break;
+        }
+    }
+    if(!key) return 0;
+    if(mods & 1) key |= GUI_KEY_SHIFT;
+    if(mods & 2) key |= GUI_KEY_ALT;
+    if(mods & 4) key |= GUI_KEY_CTRL;
+    if(mods & 16) key |= GUI_KEY_REPEAT;
+    return key;
+}
+
+/* a full key as the desktop's own windows take it, as before the keys had their modifiers: Ctrl and a letter or one of
+   @ [ \ ] ^ _ its control byte, Ctrl+Space 0, Ctrl+/ 31, Tab, Enter and Backspace themselves with Ctrl; -1 for any
+   other key with Ctrl, Shift+Tab and the function keys; the rest without their modifiers (gui_key() sends an Alt
+   key's Esc first, to the Terminal) */
+int gui_own_key(int key) {
+    int code = key & GUI_KEY_MASK;
+    if((code == 9 && (key & GUI_KEY_SHIFT)) || code == GUI_BACKTAB || (code >= GUI_F(1) && code <= GUI_F(12))) return -1;
+    if(code >= 0x100 || !(key & GUI_KEY_CTRL)) return code;
+    if(code >= 'a' && code <= 'z') return code - 'a' + 1;
+    if(code >= '@' && code <= '_') return code & 0x1F;
+    if(code == ' ') return 0;
+    if(code == '/') return 31;
+    if(code == 9 || code == 13 || code == 127) return code;
+    return -1;
+}
+
 void gui_key(struct gui_state *g, int key) {
     const struct gui_app *app = g->focus >= 0 && !g->win[g->focus].min ? gui_app_of(g->focus) : NULL;
-    int rows, i;
-    if(g->dialog.kind) { dialog_key(g,key); g->dirty=true; return; }
-    if(client_keys(g) && !g->menu && key!=0 && key!=7) {              /* 10/25/26: a program's window's, as the Terminal's */
-        client_key(g,key);
+    int rows, i, full = key, code = key & GUI_KEY_MASK;
+    bool ctrl = (key & GUI_KEY_CTRL) != 0, alt = (key & GUI_KEY_ALT) != 0;
+    bool bar = ctrl ? code == ' ' || code == 'g' || code == 'G' : code == 0 || code == 7;   /* Ctrl+G, Ctrl+Space */
+    if(!g->dialog.kind && client_keys(g) && !g->menu && !bar) {     /* 10/25/26: a program's window's, as the Terminal's */
+        client_key(g,full);                             /* (11/05/26: every key with its modifiers) */
         return;
     }
+    key = gui_own_key(full);                            /* 11/05/26: the desktop's own windows: as before */
+    if(key < 0) return;
+    if(g->dialog.kind) { dialog_key(g,key); g->dirty=true; return; }
     if(app && app->keys && !g->menu && key!=0 && key!=7) {             /* 10/17/26: every key but Ctrl+G is its own */
-        if(app->key) app->key(g,key);
-        g->dirty=true;
+        if(app->key) app->key(g,key | (alt && g->focus==GUI_TERMINAL ? GUI_KEY_ALT : 0));    /* 11/05/26: Alt: */
+        g->dirty=true;                                  /* the Terminal sends an Esc first, as a terminal does */
         return;
     }
     if(key==17) { gui_request_quit(g); return; }                        /* Ctrl+Q */
@@ -1303,14 +1869,24 @@ void gui_key(struct gui_state *g, int key) {
         return;
     }
     if(g->focus==GUI_CALC) { gui_calc_key(&g->calc,key); g->dirty=true; }
-    if(g->focus==GUI_SETTINGS) {
-        if(key>='1' && key<='3') g->speed=key-'0';
-        if(key=='t' || key=='T') g->night=!g->night;
+    if(g->focus==GUI_SETTINGS && !(full&GUI_KEY_REPEAT)) {     /* 11/05/26: each change kept in the settings; */
+        if(key>='1' && key<='3') { g->speed=key-'0'; pref_save(g,1); }  /* a key held toggles once (the review */
+        if(key=='t' || key=='T') { g->night=!g->night; pref_save(g,0); }    /* of stage 2) */
         g->dirty=true;
     }
 }
 
 /**** drawing ****/
+
+/* a window's icon in its title bar and taskbar button: the wave in foam (teal on teal otherwise); 11/05/26: a program
+   the desktop started from the registry, its entry's */
+static void window_icon(const struct gui_state *g, const struct gui_draw *d, int x, int y, int id) {
+    const struct gui_client *c = id >= GUI_FIRST_CLIENT ? client_at(g, id) : NULL;
+    int k = c ? reg_of_pid(g, c->st.pid) : -1;
+    if(k >= 0) reg_icon(d, x, y, &g->reg.e[k], 1);
+    else if(gui_window_icon(g, id) == ICON_WAVE) gd_icon_tint(d, x, y, ICON_WAVE, 1, FOAM);
+    else gd_icon(d, x, y, gui_window_icon(g, id), 1);
+}
 
 static void title_button(const struct gui_draw *d, int x, int y, int kind, u32 bg) {
     gd_rect(d, x, y, 20, 20, bg);
@@ -1342,8 +1918,7 @@ static void window(const struct gui_state *g, const struct gui_draw *d, int id) 
     gd_rect(d,x+5,y+6,w->w,w->h,SHADOW);
     gd_rect(d,x,y,w->w,w->h,INK); gd_rect(d,x+1,y+1,w->w-2,w->h-2,PAPER);
     gd_rect(d,x+1,y+1,w->w-2,27,bar);
-    if(gui_window_icon(g,id)==ICON_WAVE) gd_icon_tint(d,x+8,y+6,ICON_WAVE,1,FOAM);   /* teal on teal otherwise */
-    else gd_icon(d,x+8,y+6,gui_window_icon(g,id),1);
+    window_icon(g,d,x+8,y+6,id);
     title_of(g,id,b,sizeof(b));
     gd_name(d,x+30,y+6,b,(w->w-38-buttons*24)/8,PAPER);
     title_button(d,x+w->w-26,y+4,0,knob);
@@ -1393,7 +1968,8 @@ static void window(const struct gui_state *g, const struct gui_draw *d, int id) 
         for(i=0;i<3;i++) gd_button(&in,x+16+i*112,y+100,104,30,i==0?"1 / Slow":i==1?"2 / Medium":"3 / Fast",g->speed==i+1?TEAL:SHELL,g->speed==i+1?PAPER:INK);
         gd_text(&in,x+16,y+148,"Desktop colors (T)",INK);
         gd_button(&in,x+16,y+172,176,32,g->night?"Dusk / change":"Ocean / change",TEAL,PAPER);
-        gd_text(&in,x+16,y+220,"Changes last for this desktop session.",MUTED);
+        gd_name(&in,x+16,y+220,g->pref_status[0]?g->pref_status:"Kept in the settings on the stick, if any.",   /* 11/05/26 */
+                (w->w-32)/8,MUTED);
     } else if(id==GUI_NOTEPAD) note_render(g,&in);
     else if(id==GUI_FILES) files_render(g,&in);
     else if(id==GUI_HELP) help_render(g,&in);
@@ -1405,17 +1981,29 @@ static void window(const struct gui_state *g, const struct gui_draw *d, int id) 
 
 static void menu_render(const struct gui_state *g, const struct gui_draw *d) {
     struct menu_item it[MENU_MAX];
-    int n = menu_items(g, g->menu, it), x, top, w, h, i, y;
-    menu_place(g, g->menu, it, n, &x, &top, &w, &h);    /* 10/26/26: where a right-click opened it, when it did */
-    gd_rect(d, x + 4, top + 4, w, h, NAVY);
-    gd_rect(d, x, top, w, h, INK);
-    gd_rect(d, x + 1, top + (g->menu_y ? 1 : 0), w - 2, h - (g->menu_y ? 2 : 1), PAPER);
-    for(i = 0; i < n; i++) {
-        y = item_top(it, i, top);
+    struct menu_box b;
+    int n = menu_items(g, g->menu, it), x, w, i, y, keys;
+    bool chosen;
+    u32 fg;
+    menu_box_of(g, g->menu, it, n, &b);                 /* 10/26/26: where a right-click opened it, when it did */
+    x = b.x;
+    w = b.w;
+    gd_rect(d, x + 4, b.y + 4, w, b.h, NAVY);
+    gd_rect(d, x, b.y, w, b.h, INK);
+    gd_rect(d, x + 1, b.y + (g->menu_y ? 1 : 0), w - 2, b.h - (g->menu_y ? 2 : 1), PAPER);
+    if(b.up) gd_glyph(d, x + w / 2 - 4, b.y + 1, 0x1E, MUTED, 1);   /* 11/05/26: more above, more below */
+    if(b.down) gd_glyph(d, x + w / 2 - 4, b.y + b.h - 4 - STRIP + 1, 0x1F, MUTED, 1);
+    for(i = b.first; i < b.end; i++) {
+        y = entry_top(&b, it, i);
         if(!it[i].label) { gd_rect(d, x + 8, y + 4, w - 16, 1, LINE); continue; }
-        if(i == g->selection && it[i].on) gd_rect(d, x + 3, y, w - 6, 24, TEAL);
-        gd_text(d, x + 14, y + 4, it[i].label, !it[i].on ? 0xA3B4B3 : i == g->selection ? PAPER : INK);
-        gd_text(d, x + w - 12 - (int)strlen(it[i].keys) * 8, y + 4, it[i].keys, i == g->selection && it[i].on ? FOAM : MUTED);
+        chosen = i == g->selection && it[i].on;
+        if(chosen) gd_rect(d, x + 3, y, w - 6, 24, TEAL);
+        fg = !it[i].on ? 0xA3B4B3 : chosen ? PAPER : INK;
+        if(it[i].mark) gd_glyph(d, x + 4, y + 4, it[i].mark == 'v' ? 0xFB : 0x07, fg, 1);   /* 11/05/26: a check, a dot */
+        gd_name(d, x + 14, y + 4, it[i].label, (w - 28) / 8 - gd_cells(it[i].keys) - (it[i].sub ? 2 : 0), fg);
+        keys = gd_cells(it[i].keys) * 8;
+        gd_text(d, x + w - 12 - keys - (it[i].sub ? 16 : 0), y + 4, it[i].keys, chosen ? FOAM : MUTED);
+        if(it[i].sub) gd_glyph(d, x + w - 18, y + 4, 0x10, fg, 1);  /* 11/05/26: it opens a menu */
     }
 }
 
@@ -1442,14 +2030,25 @@ void gui_render(const struct gui_state *g,const struct fb_surface *s) {
         gd_icon(&d,tx+10,ty+14,suite[i]->icon,1);
         gd_name(&d,tx+36,ty+14,suite[i]->title,13,FOAM);
     }
+    for(i=0,x=0;i<g->reg.count;i++) {                   /* 11/05/26: the registry's, after them, where there is room */
+        const struct gui_reg *r=&g->reg.e[g->reg.by[i]];
+        int tx, ty;
+        if(!r->desktop || r->app>=0) continue;
+        tile_box(SUITE+x++,&tx,&ty);
+        if(tx+144>g->width) continue;
+        gd_rect(&d,tx,ty,144,44,INK);
+        reg_icon(&d,tx+10,ty+14,r,1);
+        gd_name(&d,tx+36,ty+14,r->title,13,FOAM);
+    }
     gd_rect(&d,0,0,g->width,MENU_H,PAPER);
     gd_rect(&d,0,MENU_H-1,g->width,1,LINE);
-    for(i=1;i<=MENUS;i++) {
-        x=menu_left(i);
-        if(g->menu==i && !g->menu_y) gd_rect(&d,x-4,2,(int)strlen(menu_names[i-1])*8+16,MENU_H-4,TEAL);
-        gd_text(&d,x+4,6,menu_names[i-1],g->menu==i && !g->menu_y?PAPER:INK);
+    n=bar(g,ids);                                       /* 11/05/26: a program's menus in place of File and Edit */
+    for(i=0,x=8;i<n;x+=title_w(g,ids[i]),i++) {
+        bool open=bar_parent(g, g->menu)==ids[i] && g->menu && !g->menu_y;
+        if(open) gd_rect(&d,x-4,2,gd_cells(menu_name(g,ids[i]))*8+16,MENU_H-4,TEAL);
+        gd_text(&d,x+4,6,menu_name(g,ids[i]),open?PAPER:menu_greyed(g,ids[i])?MUTED:INK);
     }
-    gd_text(&d,g->width-128,6,"Ride the wave.",TEAL);
+    if(x<=g->width-136) gd_text(&d,g->width-128,6,"Ride the wave.",TEAL);
     gd_rect(&d,0,g->height-TASK_H,g->width,TASK_H,NAVY);
     n=task_buttons(g,ids,&w);
     for(i=0;i<n;i++) {
@@ -1457,8 +2056,7 @@ void gui_render(const struct gui_state *g,const struct fb_surface *s) {
         x=6+i*(w+4);
         gd_rect(&d,x,g->height-TASK_H+3,w,TASK_H-6,g->focus==ids[i]?TEAL:win->min?0x1A3B48:INK);
         if(client_waiting(g,ids[i])) gd_rect(&d,x,g->height-6,w,3,CORAL);   /* 10/25/26: opened without the focus */
-        if(gui_window_icon(g,ids[i])==ICON_WAVE) gd_icon_tint(&d,x+4,g->height-TASK_H+4,ICON_WAVE,1,FOAM);
-        else gd_icon(&d,x+4,g->height-TASK_H+4,gui_window_icon(g,ids[i]),1);
+        window_icon(g,&d,x+4,g->height-TASK_H+4,ids[i]);
         title_of(g,ids[i],b,sizeof(b));
         gd_name(&d,x+24,g->height-TASK_H+5,b,(w-28)/8,win->min?MUTED:FOAM);
     }

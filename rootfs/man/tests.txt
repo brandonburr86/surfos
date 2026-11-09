@@ -51,6 +51,9 @@ OPTIONS
               hang pays no heed to the close button; crash faults after
               its first present.
     wintest   The window calls: nodesk, pty, show, tty.
+              desk [file]: the desktop applications' calls (menus,
+              choosers, paste, the theme); raw: raw mode asked for on
+              the desktop's console, which the desktop keeps.
 
 EXAMPLES
     pagetest 60

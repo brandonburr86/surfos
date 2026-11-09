@@ -11,6 +11,12 @@ Also the one-line text box that dialogs and Notepad's find bar use.
 10/25/26 (programs' windows, stage C6): the launcher's chooser, GUI_DLG_RUN: the programs of one
 folder (it never leaves it) above the line to run, which a program picked in the list replaces;
 its answer is that line as typed.
+11/05/26 (the desktop applications, track desk): the choosers for a program (WIN_DIALOG): its own
+title, the file types it is for (Open lists those files and the folders; a Save as name without one
+of them gets the first), and Choose folder (GUI_DLG_FOLDER: the folders only; Enter or Choose takes
+the folder selected, or the one shown while .. is; Right or a double-click goes into one). A
+program's chooser, or the screenshot's, that another dialog replaces before it is answered is told
+so (client_chooser_dropped()), so that nothing waits for it for ever.
 */
 #include "guipriv.h"
 #include <string.h>
@@ -112,12 +118,53 @@ void field_render(const struct gui_draw *d, const struct gui_field *f, int x, in
 struct dlg_layout { int x, y, w, h, list_y, rows, field_y, buttons_y, up_x; };
 
 static bool chooser(const struct gui_dialog *dl) {
-    return dl->kind == GUI_DLG_OPEN || dl->kind == GUI_DLG_SAVE || dl->kind == GUI_DLG_RUN;
+    return dl->kind == GUI_DLG_OPEN || dl->kind == GUI_DLG_SAVE || dl->kind == GUI_DLG_RUN || dl->kind == GUI_DLG_FOLDER;
+}
+
+/* 11/05/26: s is t in any case (t in lower case, as surfos/win.h's win_types() gives it) */
+static bool same_name(const char *s, const char *t) {
+    for(; *s && *t; s++, t++) if((*s >= 'A' && *s <= 'Z' ? *s + 32 : *s) != *t) return false;
+    return !*s && !*t;
+}
+
+/* 11/05/26: name is of one of types (a program's: "png bmp =Makefile", read by surfos/win.h's win_types(), which the
+   kernel checked them with): its extension, or the whole name for an '=' type, in any case */
+static bool type_listed(const char *types, const char *name) {
+    char list[WIN_TYPES][WIN_TYPE_LEN + 2];
+    const char *ext = strrchr(name, '.');
+    int n = win_types(types, (unsigned)strlen(types) + 1, list), i;
+    for(i = 0; i < n; i++)
+        if(list[i][0] == '=' ? same_name(name, list[i] + 1) : ext && ext != name && same_name(ext + 1, list[i])) return true;
+    return false;
+}
+
+/* the first extension of types into out, "" when it gives only whole names */
+static void first_type(const char *types, char *out, size_t size) {
+    char list[WIN_TYPES][WIN_TYPE_LEN + 2];
+    int n = win_types(types, (unsigned)strlen(types) + 1, list), i;
+    out[0] = 0;
+    for(i = 0; i < n; i++) if(list[i][0] != '=') { strlcpy(out, list[i], size); return; }
 }
 
 /* 10/25/26: a chooser with a line to type under its list: Save's name, the launcher's command */
 static bool named(const struct gui_dialog *dl) {
     return dl->kind == GUI_DLG_SAVE || dl->kind == GUI_DLG_RUN;
+}
+
+/* 11/05/26: the list of a program's chooser: Choose folder's folders only, a typed chooser's folders and its types'
+   files (the rest are not counted as not shown either) */
+static void filter(struct gui_dialog *dl) {
+    int i, k = 0, gone = 0;
+    if(dl->kind != GUI_DLG_FOLDER && !dl->types[0]) return;
+    for(i = 0; i < dl->count; i++) {
+        bool keep = dl->list[i].type == GUI_DIR || (dl->kind != GUI_DLG_FOLDER && type_listed(dl->types, dl->list[i].name));
+        if(keep) {
+            if(k != i) dl->list[k] = dl->list[i];
+            k++;
+        } else gone++;
+    }
+    dl->count = k;
+    dl->total -= gone;
 }
 
 static int has_up(const struct gui_dialog *dl) {
@@ -169,10 +216,13 @@ static void begin(struct gui_state *g, int kind, int act, const char *title) {
        question its Save led to. A later save then does not do it. (An answer closes its dialog before what it
        leads to opens, so the question's own flow keeps it.) */
     if(dl->kind && g->pending != PEND_NONE) g->pending = PEND_NONE;
+    if(dl->kind) client_chooser_dropped(g, dl->act, dl->target);   /* 11/05/26: a program's chooser, never answered */
     dl->kind = kind;
     dl->act = act;
     dl->choice = 0;
     dl->list_focus = false;
+    dl->program = false;                                /* 11/05/26 (the review of stage 2) */
+    dl->types[0] = 0;                                   /* 11/05/26: every file, unless a program's says */
     strlcpy(dl->title, title, sizeof(dl->title));
     dl->text[0][0] = dl->text[1][0] = 0;
     dl->label[0] = "OK";
@@ -242,6 +292,7 @@ static void navigate(struct gui_state *g, const char *to) {
     }
     dl->count = n < 0 ? 0 : n;
     if(n < 0) dl->total = 0;
+    filter(dl);                                         /* 11/05/26: a program's chooser's types, or folders */
     dl->selected = dl->top = 0;
     dl->click_row = -1;
     dl->list_focus = false;                             /* in a new folder, Enter is for the name again */
@@ -289,6 +340,21 @@ static void go_up(struct gui_state *g) {
     navigate(g, path);
 }
 
+/* 11/05/26: a chooser for a program (guiclient.c, WIN_DIALOG) */
+void dialog_chooser_for(struct gui_state *g, int kind, int act, const char *title, const char *dir, const char *name,
+                        const char *types) {
+    struct gui_dialog *dl = &g->dialog;
+    char start[GUI_PATH_MAX];
+    strlcpy(start, dir && dir[0] ? dir : g->dialog.dir[0] ? g->dialog.dir : "/", sizeof(start));
+    begin(g, kind, act, title && title[0] ? title : kind == GUI_DLG_OPEN ? "Open a file" :
+                        kind == GUI_DLG_FOLDER ? "Choose a folder" : "Save as");
+    dl->label[0] = kind == GUI_DLG_OPEN ? "Open" : kind == GUI_DLG_FOLDER ? "Choose" : "Save";
+    dl->label[2] = "Cancel";
+    strlcpy(dl->types, kind == GUI_DLG_FOLDER ? "" : types, sizeof(dl->types));
+    navigate(g, start);                                 /* a folder that cannot be read: the last chooser's, or / */
+    if(named(dl)) field_set(&dl->field, name, true);
+}
+
 /* the selected row was picked in a Save chooser (or the launcher's): a file's name goes in the box */
 static void picked(struct gui_state *g) {
     struct gui_dialog *dl = &g->dialog;
@@ -302,11 +368,34 @@ static void too_long(struct gui_state *g) {
     g->dirty = true;
 }
 
+/* 11/05/26: Choose folder's Enter or Choose: the folder selected, or the one shown while .. is selected */
+static void choose_folder(struct gui_state *g) {
+    struct gui_dialog *dl = &g->dialog;
+    char path[GUI_PATH_MAX];
+    int i = dl->selected - has_up(dl);
+    if(i >= 0 && i < dl->count && dl->list[i].type == GUI_DIR) {
+        if(!gui_join(path, sizeof(path), dl->dir, dl->list[i].name)) { too_long(g); return; }
+        answer(g, 0, path);
+    } else answer(g, 0, dl->dir);
+}
+
+/* 11/05/26: into the folder selected (Choose folder's Right and double-click), or up for .. */
+static void folder_into(struct gui_state *g) {
+    struct gui_dialog *dl = &g->dialog;
+    char path[GUI_PATH_MAX];
+    int up = has_up(dl), i = dl->selected - up;
+    if(up && dl->selected == 0) { go_up(g); return; }
+    if(i < 0 || i >= dl->count || dl->list[i].type != GUI_DIR) return;
+    if(!gui_join(path, sizeof(path), dl->dir, dl->list[i].name)) { too_long(g); return; }
+    navigate(g, path);
+}
+
 /* Enter, a double-click or the Open/Save button */
 static void choose(struct gui_state *g) {
     struct gui_dialog *dl = &g->dialog;
     char path[GUI_PATH_MAX];
     int up = has_up(dl), i;
+    if(dl->kind == GUI_DLG_FOLDER) { choose_folder(g); return; }
     if(dl->kind == GUI_DLG_OPEN || dl->list_focus) {
         i = dl->selected - up;
         if(up && dl->selected == 0) { go_up(g); return; }
@@ -331,6 +420,14 @@ static void choose(struct gui_state *g) {
         navigate(g, path);
         return;
     }
+    if(dl->types[0] && !type_listed(dl->types, dl->field.text)) {    /* 11/05/26: a name of one of its types */
+        char ext[WIN_TYPE_LEN + 2], name[GUI_PATH_MAX];
+        first_type(dl->types, ext, sizeof(ext));
+        if(ext[0]) {                                    /* (only whole names: the name as it is) */
+            if(snprintf(name, sizeof(name), "%s.%s", dl->field.text, ext) >= (int)sizeof(dl->field.text)) { too_long(g); return; }
+            field_set(&dl->field, name, false);
+        }
+    }
     if(!gui_join(path, sizeof(path), dl->dir, dl->field.text)) { too_long(g); return; }
     answer(g, 0, path);
 }
@@ -338,8 +435,12 @@ static void choose(struct gui_state *g) {
 static void chooser_key(struct gui_state *g, int key) {
     struct gui_dialog *dl = &g->dialog;
     struct dlg_layout l;
-    bool list = dl->kind == GUI_DLG_OPEN || dl->list_focus;
+    bool list = dl->kind == GUI_DLG_OPEN || dl->kind == GUI_DLG_FOLDER || dl->list_focus;
     layout(g, &l);
+    if(dl->kind == GUI_DLG_FOLDER) {                    /* 11/05/26: Right goes in, Left and Backspace up */
+        if(key == GUI_RIGHT) { folder_into(g); return; }
+        if((key == GUI_LEFT || key == 8 || key == 127) && has_up(dl)) { go_up(g); return; }
+    }
     switch(key) {
     case GUI_UP: dl->selected--; dl->list_focus = true; break;
     case GUI_DOWN: dl->selected++; dl->list_focus = true; break;
@@ -349,7 +450,10 @@ static void chooser_key(struct gui_state *g, int key) {
     case 9: if(named(dl)) dl->list_focus = !dl->list_focus; g->dirty = true; return;
     default:
         if(list && (key == GUI_HOME || key == GUI_END)) { dl->selected = key == GUI_HOME ? 0 : dl->count + has_up(dl) - 1; break; }
-        if(dl->kind == GUI_DLG_OPEN) { if((key == 8 || key == 127) && has_up(dl)) go_up(g); return; }
+        if(dl->kind == GUI_DLG_OPEN || dl->kind == GUI_DLG_FOLDER) {
+            if((key == 8 || key == 127) && has_up(dl)) go_up(g);
+            return;
+        }
         if(field_key(&dl->field, key, g->clip, g->clip_len)) dl->list_focus = false;
         g->dirty = true;
         return;
@@ -417,7 +521,10 @@ void dialog_pointer(struct gui_state *g, int x, int y, bool press) {
     dl->list_focus = true;
     picked(g);
     g->dirty = true;
-    if(gui_double(&dl->click_ms, &dl->click_row, g->now, row)) choose(g);
+    if(gui_double(&dl->click_ms, &dl->click_row, g->now, row)) {
+        if(dl->kind == GUI_DLG_FOLDER) folder_into(g);  /* 11/05/26: a folder opens; Choose takes it */
+        else choose(g);
+    }
 }
 
 void dialog_wheel(struct gui_state *g, int rows) {
@@ -454,8 +561,11 @@ void dialog_render(const struct gui_state *g, const struct gui_draw *d) {
     gd_rect(d, l.x, l.y, l.w, l.h, INK);
     gd_rect(d, l.x + 1, l.y + 1, l.w - 2, l.h - 2, PAPER);
     gd_rect(d, l.x + 1, l.y + 1, l.w - 2, TITLE_H - 1, TEAL);
-    gd_glyph(d, l.x + 12, l.y + 6, 0xF7, FOAM, 1);
-    gd_name(d, l.x + 28, l.y + 6, dl->title, (l.w - 40) / 8, PAPER);
+    if(dl->program) gd_name(d, l.x + 12, l.y + 6, dl->title, (l.w - 24) / 8, PAPER);   /* 11/05/26: the sign is */
+    else {                                              /* the desktop's own dialogs' alone (the review of stage 2) */
+        gd_glyph(d, l.x + 12, l.y + 6, 0xF7, FOAM, 1);
+        gd_name(d, l.x + 28, l.y + 6, dl->title, (l.w - 40) / 8, PAPER);
+    }
     cells = (l.w - 32) / 8;
     if(dl->kind == GUI_DLG_MESSAGE || dl->kind == GUI_DLG_CONFIRM) {
         gd_name(d, l.x + 16, l.y + 44, dl->text[0], cells, INK);
@@ -477,7 +587,8 @@ void dialog_render(const struct gui_state *g, const struct gui_draw *d) {
             int k = dl->top + row - up;
             py = l.y + l.list_y + row * ROW_H;
             if(dl->top + row == dl->selected)
-                gd_rect(&list, l.x + 16, py, l.w - 32, ROW_H, dl->kind == GUI_DLG_OPEN || dl->list_focus ? PICK : BAND);
+                gd_rect(&list, l.x + 16, py, l.w - 32, ROW_H, dl->kind == GUI_DLG_OPEN || dl->kind == GUI_DLG_FOLDER ||
+                        dl->list_focus ? PICK : BAND);
             if(k < 0) {
                 gd_icon(&list, l.x + 22, py + 1, ICON_FOLDER, 1);
                 gd_text(&list, l.x + 44, py + 1, ".. (up one folder)", MUTED);

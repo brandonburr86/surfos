@@ -34,6 +34,7 @@ them at once (about 20 ms) and checks nothing then.
 #include <fs/fat.h>
 #include <fs/bcache.h>
 #include <surfos/process.h>
+#include <surfos/job.h>
 #include <net/net.h>
 #include <net/eth.h>
 #include <net/ip.h>
@@ -183,6 +184,30 @@ int heaptest() {
 
 static void exit_with_arg(void *arg) {
     task_exit((int)(u_long)arg);
+}
+
+/* 11/09/26 (track desk, the second review): a task started TF_TOLD (the desktop's programs, shell/guisys_win.c) has
+   its end kept for the task that started it, which takes it once: pid, name, exit code, how, and no window */
+static void told_exit(void *arg) {
+    task_exit((int)(u_long)arg);
+}
+
+static void test_told_ends(void) {
+    struct task_end e[TASK_ENDS];
+    surf_task *k;
+    u_long pid = 0;
+    int status = -1, n;
+    while(task_ends_take(e, TASK_ENDS) > 0) ;           /* none of an earlier run's */
+    k = kthread_create("told", told_exit, (void *)2, PL_NORMAL, TF_TOLD);
+    if(k) {
+        pid = k->pid;
+        task_wait(pid, &status);
+    }
+    n = task_ends_take(e, TASK_ENDS);
+    /* (its line within one screen line: the pager may split a longer one, and the smoke test looks for it whole) */
+    check(k && status == 2 && n == 1 && e[0].pid == pid && e[0].code == 2 && e[0].how == WX_EXITED && !e[0].window &&
+          !strcmp(e[0].name, "told") && task_ends_take(e, TASK_ENDS) == 0,
+          "a program's end kept for the desktop that started it, given once");
 }
 
 static void test_tasks(void) {
@@ -3924,6 +3949,15 @@ static void test_net(void) {
 
 static volatile int raw_was_set;
 
+/* 11/05/26 (the review of stage 2): a task that is not the owner of a terminal in TTY_RAW_KEYS (a program the desktop
+   started, on its console) may not take raw mode, nor end it by ending */
+static volatile int raw_refused;
+
+static void try_raw_and_exit(void *arg) {
+    struct tty *t = (struct tty *)arg;
+    raw_refused = tty_ctl(t, TTY_RAW, 1) == -16 && tty_ctl(t, TTY_RAW, 0) == -16 && t->raw == TTY_RAW_KEYS;
+}
+
 static void set_raw_and_exit(void *arg) {     /* and never turns it off, nor the inverse or the cursor */
     struct tty *t = (struct tty *)arg;
     const char *s = "\033[7m\033[?25l";
@@ -4025,8 +4059,29 @@ static void test_tty(void) {
     n = tty_read(t, buf, sizeof(buf));
     check(n == 30 && !memcmp(buf, "\033[1;5D\033[5;2~\033[24;4~\033[1;7H\033[Z\033b", 30),
           "tty: raw mode sends modifiers as xterm does: Ctrl+Left, Shift+PgUp, Alt+Shift+F12, Ctrl+Alt+Home, Shift+Tab, Alt+b");
+    tty_key(t, LEFT, KEY_REPEAT); tty_key(t, 'r', KEY_REPEAT);   /* 11/05/26: a repeat is TTY_RAW_KEYS's alone */
+    n = tty_read(t, buf, sizeof(buf));
+    check(n == 4 && !memcmp(buf, "\033[Dr", 4), "tty: raw mode 1 sends a key the keyboard repeats as it was");
+    /* 11/05/26 (the desktop's keys): TTY_RAW_KEYS, every key with its modifiers exactly and its repeat */
+    check(tty_ctl(t, TTY_RAW, TTY_RAW_KEYS) == 0 && t->raw == TTY_RAW_KEYS, "tty: raw mode with keys (TTY_RAW_KEYS) on");
+    tty_key(t, 'a', 0); tty_key(t, '\t', 0); tty_key(t, 's', KEY_CTRL); tty_key(t, 'S', KEY_CTRL | KEY_SHIFT);
+    tty_key(t, '\t', KEY_CTRL); tty_key(t, '0', KEY_CTRL); tty_key(t, 0x1B, 0);
+    n = tty_read(t, buf, sizeof(buf));
+    check(n == 37 && !memcmp(buf, "a\t\033[115;5u\033[83;6u\033[9;5u\033[48;5u\033[27;1u", 37),
+          "tty: TTY_RAW_KEYS: a plain key its byte, Ctrl+S, Ctrl+Shift+S, Ctrl+Tab, Ctrl+0 and Esc as ESC[c;mu");
+    tty_key(t, UP, 0); tty_key(t, F5, KEY_REPEAT); tty_key(t, 'x', KEY_ALT | KEY_REPEAT); tty_key(t, '\r', KEY_SHIFT);
+    n = tty_read(t, buf, sizeof(buf));
+    check(n == 30 && !memcmp(buf, "\033[1;1A\033[15;17~\033[120;19u\033[13;2u", 30),
+          "tty: TTY_RAW_KEYS: the special keys always with m, a repeat's 16 in m, Alt+X, Shift+Enter");
+    raw_refused = 0;
+    k = kthread_create("rawkeys", try_raw_and_exit, t, PL_NORMAL, 0);
+    if(k) task_wait(k->pid, &status);
+    tty_key(t, 'k', KEY_CTRL);
+    n = tty_read(t, buf, sizeof(buf));
+    check(k && raw_refused && t->raw == TTY_RAW_KEYS && n == 8 && !memcmp(buf, "\033[107;5u", 8),
+          "tty: TTY_RAW_KEYS is its owner's: another task's TTY_RAW is EBUSY, its end changes nothing, keys still come");
     check(tty_ctl(t, TTY_RAW, 0) == 0 && !t->raw, "tty: raw mode off");
-    check(tty_ctl(t, TTY_RAW, 2) < 0 && tty_ctl(t, 99, 0) < 0, "tty: unknown requests are refused");
+    check(tty_ctl(t, TTY_RAW, 3) < 0 && tty_ctl(t, 99, 0) < 0, "tty: unknown requests are refused");
     raw_was_set = 0;
     k = kthread_create("rawexit", set_raw_and_exit, t, PL_NORMAL, 0);
     if(k) task_wait(k->pid, &status);
@@ -4054,7 +4109,7 @@ static void (*const tests[])(void) = {
     test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_mutex_wake,
     test_close_cut_short, test_kill_lock_logged, test_mount_probe, test_vfs_holds, test_kill_reader, test_kill_cleanup,
     test_kill_loop, test_kill_soon, test_kill_fileloop,
-    test_user, test_net, test_usb, test_tasks, test_kills,
+    test_user, test_net, test_usb, test_tasks, test_told_ends, test_kills,
     test_user_kill, test_fpu, test_spawn64, test_kill_memory, test_kstack, test_del_key, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore,
     test_event_fn, test_libc, test_tty
 };

@@ -119,6 +119,51 @@ int gd_cells(const char *s) {
     return decode(s, NULL, 0);
 }
 
+/* 11/05/26 (the review of stage 2): sys/guidraw.h; the same walk as kernel/win.c's menu_cells(), which checks what a
+   program's menus say: whole sequences only (a lead, its continuations, its last), each one cell */
+int gd_text_cells(const char *s, u8 *cell) {
+    struct utf8_dec d;
+    u8 out[UTF8_OUT_MAX], had, c;
+    int cells = 0, k;
+    memset(&d, 0, sizeof(d));
+    for(; *s; s++) {
+        c = (u8)*s;
+        if(c < 0x20 || c == 0x7F || (d.have == 1 && d.b[0] == 0xC2 && c < 0xA0)) return -1;   /* U+0080..U+009F */
+        had = d.have;
+        k = utf8_feed(&d, c, out);
+        if(c < 0x80) {
+            if(had) return -1;                          /* it cut a sequence short */
+        } else if(!(!had && d.have == 1 && !k) && !(had && d.have == had + 1 && !k) && !(had && !d.have && k == 1))
+            return -1;
+        if(k && cell) cell[cells] = out[0];
+        cells += k;
+    }
+    return d.have ? -1 : cells;
+}
+
+static u8 fold(u8 c) {
+    return c == 0xFF ? ' ' : c >= 'A' && c <= 'Z' ? (u8)(c + 32) : c;
+}
+
+static bool trailing(u8 c) {
+    c = fold(c);
+    return c == ' ' || (c > ' ' && c < 0x7F && !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9'));
+}
+
+/* 11/09/26 (the second review, N4): kernel/win.c's reads_as(): blanks around, and runs of them inside, read as one
+   space, and punctuation at the end is left out */
+bool gd_reads_as(const u8 *cell, int n, const char *const *names, int count) {
+    int i, j, k;
+    while(n > 0 && fold(cell[0]) == ' ') cell++, n--;
+    while(n > 0 && trailing(cell[n - 1])) n--;
+    for(i = 0; i < count; i++) {
+        for(k = 0, j = 0; k < n && names[i][j] && fold(cell[k]) == (u8)names[i][j]; j++)
+            if(fold(cell[k++]) == ' ') while(k < n && fold(cell[k]) == ' ') k++;
+        if(k == n && !names[i][j]) return true;
+    }
+    return false;
+}
+
 /* a name in at most cells cells: a longer one ends in … */
 int gd_name(const struct gui_draw *d, int x, int y, const char *s, int cells, u32 c) {
     u8 out[160];

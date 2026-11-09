@@ -680,6 +680,8 @@ static void copy_key(struct netcfg_settings *to, const struct netcfg_settings *f
     case NETCFG_ETHERNET:     to->ethernet_dhcp = from->ethernet_dhcp; break;
     case NETCFG_HOSTNAME:     strlcpy(to->hostname, from->hostname, sizeof(to->hostname)); break;
     case NETCFG_HISTORY:      to->history = from->history; break;
+    case NETCFG_THEME:        to->theme = from->theme; break;      /* 11/05/26 (track desk): the desktop's keys */
+    case NETCFG_POINTER:      to->pointer = from->pointer; break;
     }
     to->set = (to->set & ~(1u << k)) | (from->set & (1u << k));
 }

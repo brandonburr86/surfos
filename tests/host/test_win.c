@@ -19,7 +19,16 @@
    and the test presents from its own memory.
    10/25/26 (stage C6): whether a window's program is in the foreground job of a pty its desktop adopted.
    10/26/26 (stage C12): WIN_CLIP only while the window has the focus, the desktop taking the latest text once, and
-   the text it never took going with it; WIN_ALERT counted in the window's state. */
+   the text it never took going with it; WIN_ALERT counted in the window's state.
+   11/05/26 (the desktop applications, track desk, stage 1: the ABI): WIN_THEME, the theme and its colours; the
+   argument checks of WIN_MENU, WIN_PASTE, WIN_DIALOG and WIN_TAKE,
+   each on the kernel's copy, with nothing left allocated; and (the review of the ABI) menu text as the desktop draws
+   it, titles that would pass for the desktop's, submenus and a Help, a chooser's flags and types. 11/05/26 (stage 2):
+   the calls themselves and their desktop's side: menus set, lent to the desktop and taken away; the clipboard given
+   and pasted, only with the focus, whole or not at all, the window's own copy not yet taken first; a chooser asked
+   for after input, taken, answered by its number (chosen, cancelled, without memory), its answer's place kept, its
+   path taken once, after the hang-up too; the theme, to the windows that asked; and everything a window holds gone
+   with either side's end. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -1115,6 +1124,994 @@ static void test_clip_alert(void) {
     end();                                              /* the desktop's end frees the text it never took */
 }
 
+/**** 11/05/26 (track desk, stage 1): the new calls' arguments ****/
+
+/* entries of a WIN_MENU */
+static struct win_menu_item mi(unsigned id, unsigned flags, const char *label, const char *keys) {
+    struct win_menu_item e;
+    memset(&e, 0, sizeof(e));
+    e.id = id;
+    e.flags = flags;
+    strlcpy(e.label, label, sizeof(e.label));
+    strlcpy(e.keys, keys, sizeof(e.keys));
+    return e;
+}
+
+static int menu_call(int fd, const struct win_menu_item *it, unsigned n) {
+    struct win_menu m;
+    m.items = it;
+    m.count = n;
+    as(prog);
+    return sys_winctl(fd, WIN_MENU, &m);
+}
+
+static void test_theme(void) {
+    struct win_info k;
+    struct win_theme t;
+    char guard[sizeof(struct win_theme)];
+    int fd;
+    begin();
+    CHECK(sizeof(struct win_info) == 20 && sizeof(struct win_theme) == 136 && sizeof(struct win_menu_item) == 72 &&
+          sizeof(struct win_menu) == 8 && sizeof(struct win_buffer) == 8 && sizeof(struct win_dialog) == 604);
+    fd = open_as(prog, 200, 100);
+    CHECK(fd >= 0);
+    k = info_of(prog, fd);                              /* WIN_INFO as it was */
+    CHECK(k.version == WIN_VERSION && k.w == 200 && k.h == 100 && k.screen_w == 960);
+    CHECK(!win_of_fd(prog, fd)->themed);
+    memset(&t, 0xA5, sizeof(t));                       /* 11/05/26 (the review): all of it written */
+    CHECK(sys_winctl(fd, WIN_THEME, &t) == 0);          /* the theme, until a desktop says its own the ocean's */
+    CHECK(t.theme == WIN_THEME_OCEAN && t.colors[WIN_COLOR_WINDOW] == 0xF4F1E6 && t.colors[WIN_COLOR_TEXT] == 0x153D49 &&
+          t.colors[WIN_COLOR_ACCENT] == 0x197D83 && t.colors[WIN_COLOR_DESKTOP] == 0x245A67);
+    CHECK(t.count == WIN_COLORS && t.colors[WIN_COLORS] == 0 && t.colors[WIN_THEME_SLOTS - 1] == 0);   /* room to grow */
+    CHECK(win_of_fd(prog, fd)->themed);                 /* it hears of a new theme from now on */
+    bad_lo = guard + 4;                                 /* not the program's to write */
+    bad_hi = guard + sizeof(guard);
+    CHECK(sys_winctl(fd, WIN_THEME, guard) == -EFAULT);
+    bad_lo = bad_hi = NULL;
+    CHECK(sys_winctl(fd, WIN_THEME, NULL) == -EFAULT);
+    CHECK(sys_winctl(fd, 12, &t) == -EINVAL && sys_winctl(fd, 0, &t) == -EINVAL);  /* no such op */
+    end();
+}
+
+static void test_menu_args(void) {
+    static struct win_menu_item it[WIN_MENU_ENTRIES + 1];
+    struct win_menu m;
+    struct win_menu_item kcopy[2];
+    char guard[64];
+    int fd, i, n, alive;
+    begin();
+    fd = open_as(prog, 200, 100);
+    CHECK(fd >= 0);
+    alive = live;
+    CHECK(sys_winctl(fd, WIN_MENU, NULL) == -EFAULT);
+    bad_lo = guard;
+    bad_hi = guard + sizeof(guard);
+    CHECK(sys_winctl(fd, WIN_MENU, guard) == -EFAULT);  /* the struct not the program's to read */
+    it[0] = mi(1, WIN_MENU_TITLE, "File", "");
+    it[1] = mi(2, 0, "Open", "Ctrl+O");
+    m.items = (const struct win_menu_item *)guard;      /* nor the entries */
+    m.count = 1;
+    CHECK(sys_winctl(fd, WIN_MENU, &m) == -EFAULT);
+    bad_lo = bad_hi = NULL;
+    m.items = NULL;
+    CHECK(sys_winctl(fd, WIN_MENU, &m) == -EFAULT);
+    m.items = it;
+    m.count = WIN_MENU_ENTRIES + 1;                     /* too many: before anything is read */
+    CHECK(sys_winctl(fd, WIN_MENU, &m) == -EINVAL);
+    CHECK(menu_call(fd, it, 2) == 0);                   /* a menu of one item: good */
+    CHECK(menu_call(fd, it, 0) == 0);             /* none: good too (the desktop's File and Edit) */
+    CHECK(menu_call(fd, it + 1, 1) == -EINVAL);         /* an item before any title */
+    CHECK(menu_call(fd, it, 1) == -EINVAL);             /* a menu with no items */
+    it[2] = mi(3, WIN_MENU_TITLE, "Edit", "");
+    it[3] = mi(4, 0, "Copy", "Ctrl+C");
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[1].flags = 0x100;                                /* a flag that is none */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[1].flags = WIN_MENU_TITLE | WIN_MENU_SEPARATOR;  /* both */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[1] = mi(2, WIN_MENU_TITLE, "View", "");          /* File then has no items */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[1] = mi(2, 0, "", "");                           /* an item with no label */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[1] = mi(2, WIN_MENU_SEPARATOR, "", "");          /* a separator needs none */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[1] = mi(2, WIN_MENU_CHECKED | WIN_MENU_RADIO | WIN_MENU_DISABLED, "Zoom 100%", "Ctrl+0");
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[0] = mi(1, WIN_MENU_TITLE, "", "");              /* a menu with no name */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[0] = mi(1, WIN_MENU_TITLE | WIN_MENU_DISABLED, "File", "");
+    CHECK(menu_call(fd, it, 4) == 0);
+    /* WIN_MENUS menus and no more, WIN_MENU_ITEMS items of one and no more */
+    for(n = 0, i = 0; i < WIN_MENUS; i++) {
+        it[n++] = mi(100 + i, WIN_MENU_TITLE, "M", "");
+        it[n++] = mi(200 + i, 0, "item", "");
+    }
+    CHECK(menu_call(fd, it, n) == 0);
+    it[n] = mi(300, WIN_MENU_TITLE, "M", "");
+    it[n + 1] = mi(301, 0, "item", "");
+    CHECK(menu_call(fd, it, n + 2) == -EINVAL);
+    it[0] = mi(1, WIN_MENU_TITLE, "Long", "");
+    for(i = 1; i <= WIN_MENU_ITEMS; i++) it[i] = mi(i + 1, i % 4 ? 0 : WIN_MENU_SEPARATOR, "item", "F5");
+    CHECK(menu_call(fd, it, WIN_MENU_ITEMS + 1) == 0);
+    it[WIN_MENU_ITEMS + 1] = mi(99, 0, "one more", "");
+    CHECK(menu_call(fd, it, WIN_MENU_ITEMS + 2) == -EINVAL);
+    /* the bar: the titles' cells and 3 for each, WIN_MENU_BAR at most (UTF-8 counted as the console draws it) */
+    it[0] = mi(1, WIN_MENU_TITLE, "Caf\xC3\xA9 \xE2\x80\x94 twenty-six cells!!!", "");  /* e acute, a dash */
+    it[1] = mi(2, 0, "x", "");
+    it[2] = mi(3, WIN_MENU_TITLE, "Twelve chars", "");  /* 12: 26 + 3 + 12 + 3 = 44 */
+    it[3] = mi(4, 0, "y", "");
+    CHECK(strlen(it[0].label) == 29 && menu_call(fd, it, 4) == 0);
+    it[4] = mi(5, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");  /* a Help menu is not in the bar */
+    it[5] = mi(6, 0, "About this program", "");
+    CHECK(menu_call(fd, it, 6) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE, "Thirteen char", "");     /* 45 */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    /* a label that fills its array is cut between characters, as a title is (the kernel's copy) */
+    memset(kcopy, 0, sizeof(kcopy));
+    kcopy[0].flags = WIN_MENU_TITLE;
+    memcpy(kcopy[0].label, "T", 1);
+    memset(kcopy[1].label, 'a', sizeof(kcopy[1].label));
+    memcpy(kcopy[1].label + sizeof(kcopy[1].label) - 2, "\xC3\xA9", 2);   /* an e acute across the end */
+    memset(kcopy[1].keys, 'k', sizeof(kcopy[1].keys));
+    CHECK(menu_check(kcopy, 2) == 0 && strlen(kcopy[1].label) == sizeof(kcopy[1].label) - 2 &&
+          strlen(kcopy[1].keys) == sizeof(kcopy[1].keys) - 1);
+    /* memory: the copy that cannot be made, and none left after a refusal (the menus set last are the window's until
+       it ends or they are taken away) */
+    CHECK(menu_call(fd, it, 0) == 0 && live == alive);
+    it[0] = mi(1, WIN_MENU_TITLE, "File", "");
+    it[1] = mi(2, 0, "Open", "");
+    fail_in = 1;
+    CHECK(menu_call(fd, it, 2) == -ENOMEM);
+    fail_in = 0;
+    CHECK(live == alive);
+    CHECK(sys_winctl(fd + 1, WIN_MENU, &m) == -EBADF);
+    end();
+}
+
+/* 11/05/26 (the review of the ABI): labels and shortcuts drawn as they are, titles that pass for the desktop's */
+static void test_menu_text(void) {
+    static const char *const bad[] = {
+        "a\tb", "a\x7F", "a\x1B[1m",                    /* C0 controls and DEL */
+        "a\xC2\x85" "b", "\xC2\x9F",                     /* C1 (U+0085, U+009F) */
+        "\xF7 SurfOS", "\xE9t\xE9",                         /* bytes that are no UTF-8: code page 437 ones */
+        "\xC0\xAF", "\xE0\x80\xAF", "\xED\xA0\x80", "\xF4\x90\x80\x80",   /* overlong, surrogate, past U+10FFFF */
+        "ab\xC3", "\xC3x", "\xE2\x89", "\x80", "\xBF\xBF",   /* sequences cut short, continuations alone */
+    };
+    static const char *const own[] = {
+        "\xE2\x89\x8B SurfOS", "\xE2\x89\x8B", "My \xE2\x89\x88 menu",  /* the desktop's sign: U+224B, U+2248 */
+        "SurfOS", "surfos", "Apps", " APPS ", "\xC2\xA0" "Apps\xC2\xA0", "Window", "wINDOW", "Help", " help",
+    };
+    struct win_menu_item it[4], k[2];
+    unsigned i;
+    int fd;
+    begin();
+    fd = open_as(prog, 200, 100);
+    CHECK(fd >= 0);
+    it[0] = mi(1, WIN_MENU_TITLE, "File", "");
+    it[2] = mi(3, WIN_MENU_TITLE, "View", "");
+    it[3] = mi(4, 0, "Zoom 100%", "Ctrl+0");
+    for(i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        it[1] = mi(2, 0, bad[i], "");                   /* in a label */
+        CHECK(menu_call(fd, it, 4) == -EINVAL);
+        it[1] = mi(2, 0, "Open", bad[i]);               /* in a shortcut */
+        CHECK(menu_call(fd, it, 4) == -EINVAL);
+        it[1] = mi(2, 0, "Open", "");
+        it[2] = mi(3, WIN_MENU_TITLE, bad[i], "");      /* in a title */
+        CHECK(menu_call(fd, it, 4) == -EINVAL);
+        it[2] = mi(3, WIN_MENU_TITLE, "View", "");
+    }
+    it[1] = mi(2, 0, "Caf\xC3\xA9 \xE2\x80\x9Cquoted\xE2\x80\x9D \xF0\x9F\x8C\x8A \xC2\xA0\xE2\x89\x88", "Ctrl+\xC3\xA9");
+    CHECK(menu_call(fd, it, 4) == 0);             /* UTF-8, the sign among items too, a 4-byte one drawn '?' */
+    for(i = 0; i < sizeof(own) / sizeof(own[0]); i++) {
+        it[2] = mi(3, WIN_MENU_TITLE, own[i], "");
+        CHECK(menu_call(fd, it, 4) == -EINVAL);
+    }
+    it[2] = mi(3, WIN_MENU_TITLE, "Applications", "");  /* names that only begin like the desktop's */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE, "Windows", "");
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE, "Help me", "");
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE | WIN_MENU_HELP, " Help ", "");    /* merged into the desktop's Help: it may say so */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE | WIN_MENU_HELP, "Apps", "");      /* but no other of the desktop's names */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    /* (the review of stage 2) no item of the Help menu reads as the desktop's own Help items, which follow it */
+    it[2] = mi(3, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");
+    it[3] = mi(4, 0, "About SurfOS", "");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "\xC2\xA0" "about SURFOS ", "");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "Keyboard and Mouse", "F1");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    /* 11/09/26 (the second review, N4): blanks inside read as one, and punctuation at the end is left out */
+    it[3] = mi(4, 0, "About  SurfOS.", "");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "About\xC2\xA0SurfOS!", "");        /* the no-break space is a blank */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "keyboard   AND mouse...", "");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "AboutSurfOS", "");                 /* no blank between: no name of the desktop's */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[3] = mi(4, 0, "About SurfOS 2", "");              /* a digit is no punctuation */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE, "Window:", "");        /* a title too */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[2] = mi(3, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");
+    it[3] = mi(4, 0, "About Zoomer", "");                /* its own: good */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE, "View", "");          /* in a menu of its own the name is no Help item's */
+    it[3] = mi(4, 0, "About SurfOS", "");
+    CHECK(menu_call(fd, it, 4) == 0);
+    /* the kernel's copy is what is checked: a shortcut that fills its array is cut before a sequence it cuts */
+    memset(k, 0, sizeof(k));
+    k[0].flags = WIN_MENU_TITLE;
+    k[0].label[0] = 'T';
+    k[1].label[0] = 'b';
+    memset(k[1].keys, 'k', sizeof(k[1].keys));
+    memcpy(k[1].keys + sizeof(k[1].keys) - 2, "\xE2\x89", 2);
+    CHECK(menu_check(k, 2) == 0 && strlen(k[1].keys) == sizeof(k[1].keys) - 2);
+    end();
+}
+
+/* 11/05/26 (the review): submenus one level deep, and one Help merged into the desktop's */
+static void test_menu_shape(void) {
+    static struct win_menu_item it[40];
+    int fd, i, n;
+    begin();
+    fd = open_as(prog, 200, 100);
+    CHECK(fd >= 0);
+#define SHAPE(...) do { const struct win_menu_item e[] = { __VA_ARGS__ }; n = (int)(sizeof(e) / sizeof(e[0])); \
+                        memcpy(it, e, sizeof(e)); } while(0)
+    SHAPE(mi(1, WIN_MENU_TITLE, "View", ""), mi(2, WIN_MENU_SUBMENU, "Zoom", ""), mi(3, WIN_MENU_CHILD | WIN_MENU_RADIO, "100%", "Ctrl+0"),
+          mi(4, WIN_MENU_CHILD | WIN_MENU_SEPARATOR, "", ""), mi(5, WIN_MENU_CHILD, "Fit", ""), mi(6, 0, "Grid", "Ctrl+'"));
+    CHECK(menu_call(fd, it, (unsigned)n) == 0);   /* a submenu with three children, an item after */
+    CHECK(menu_call(fd, it, 5) == 0);             /* ending in its children */
+    CHECK(menu_call(fd, it, 2) == -EINVAL);             /* a submenu with none, at the end */
+    it[2] = mi(3, 0, "100%", "");                       /* ... or before the next item */
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);
+    SHAPE(mi(1, WIN_MENU_TITLE, "View", ""), mi(2, WIN_MENU_SUBMENU, "Zoom", ""), mi(3, WIN_MENU_TITLE, "Format", ""), mi(4, 0, "Bold", ""));
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);   /* ... or before the next title */
+    SHAPE(mi(1, WIN_MENU_TITLE, "View", ""), mi(2, 0, "Zoom", ""), mi(3, WIN_MENU_CHILD, "100%", ""));
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);   /* a child of an item with no submenu */
+    SHAPE(mi(1, WIN_MENU_TITLE, "View", ""), mi(3, WIN_MENU_CHILD, "100%", ""));
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);   /* of a title */
+    SHAPE(mi(1, WIN_MENU_TITLE, "View", ""), mi(2, WIN_MENU_SUBMENU, "Zoom", ""), mi(3, WIN_MENU_CHILD | WIN_MENU_SUBMENU, "Deeper", ""),
+          mi(4, WIN_MENU_CHILD, "x", ""));
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);   /* one level only */
+    SHAPE(mi(1, WIN_MENU_TITLE | WIN_MENU_SUBMENU, "View", ""), mi(2, 0, "Zoom", ""));
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);   /* SUBMENU, CHILD and HELP where they are none */
+    it[0].flags = WIN_MENU_TITLE | WIN_MENU_CHILD;
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);
+    it[0].flags = WIN_MENU_TITLE;
+    it[1].flags = WIN_MENU_HELP;
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);
+    it[1].flags = WIN_MENU_SUBMENU | WIN_MENU_SEPARATOR;
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);
+    SHAPE(mi(1, WIN_MENU_TITLE, "View", ""), mi(2, WIN_MENU_SUBMENU, "Zoom", ""), mi(3, WIN_MENU_CHILD, "", ""));
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);   /* a child item with no label */
+    /* a submenu of WIN_MENU_ITEMS children and no more, not counted in its menu's items */
+    n = 0;
+    it[n++] = mi(1, WIN_MENU_TITLE, "Insert", "");
+    for(i = 0; i < WIN_MENU_ITEMS - 1; i++) it[n++] = mi(10 + i, 0, "item", "");
+    it[n++] = mi(2, WIN_MENU_SUBMENU, "Symbol", "");
+    for(i = 0; i < WIN_MENU_ITEMS; i++) it[n++] = mi(30 + i, WIN_MENU_CHILD, "child", "");
+    CHECK(menu_call(fd, it, (unsigned)n) == 0);
+    it[n] = mi(99, WIN_MENU_CHILD, "one more", "");
+    CHECK(menu_call(fd, it, (unsigned)n + 1) == -EINVAL);
+    /* one Help, of WIN_MENU_HELP_ITEMS items at most, anywhere among the menus */
+    n = 0;
+    it[n++] = mi(1, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");
+    for(i = 0; i < WIN_MENU_HELP_ITEMS; i++) it[n++] = mi(10 + i, 0, "topic", "");
+    it[n++] = mi(2, WIN_MENU_TITLE, "File", "");
+    it[n++] = mi(3, 0, "Open", "Ctrl+O");
+    CHECK(menu_call(fd, it, (unsigned)n) == 0);
+    it[n++] = mi(4, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");     /* two */
+    it[n++] = mi(5, 0, "More", "");
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);
+    n = 0;
+    it[n++] = mi(1, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");
+    for(i = 0; i <= WIN_MENU_HELP_ITEMS; i++) it[n++] = mi(10 + i, 0, "topic", "");
+    CHECK(menu_call(fd, it, (unsigned)n) == -EINVAL);   /* one item too many for the desktop's Help */
+    it[0] = mi(1, WIN_MENU_TITLE, "Topics", "");        /* in a menu of its own they fit */
+    CHECK(menu_call(fd, it, (unsigned)n) == 0);
+#undef SHAPE
+    end();
+}
+
+static void test_paste_take_args(void) {
+    struct win_buffer b;
+    char buf[64], guard[16];
+    int fd;
+    begin();
+    fd = open_as(prog, 200, 100);
+    CHECK(fd >= 0);
+    CHECK(sys_winctl(fd, WIN_PASTE, NULL) == -EFAULT && sys_winctl(fd, WIN_TAKE, NULL) == -EFAULT);
+    bad_lo = guard;
+    bad_hi = guard + sizeof(guard);
+    CHECK(sys_winctl(fd, WIN_PASTE, guard) == -EFAULT && sys_winctl(fd, WIN_TAKE, guard) == -EFAULT);
+    bad_lo = bad_hi = NULL;
+    b.buf = NULL;                                       /* room with no buffer */
+    b.size = 10;
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == -EFAULT && sys_winctl(fd, WIN_TAKE, &b) == -EFAULT);
+    b.size = 0;                                         /* a query: no buffer needed */
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == -EACCES && sys_winctl(fd, WIN_TAKE, &b) == -ENOENT);   /* good: no focus, */
+    b.buf = buf;                                                                                    /* nothing chosen */
+    b.size = sizeof(buf);
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == -EACCES && sys_winctl(fd, WIN_TAKE, &b) == -ENOENT);
+    end();
+}
+
+static void test_dialog_args(void) {
+    struct win_dialog d, k;
+    char guard[64];
+    int fd, i;
+    begin();
+    fd = open_as(prog, 200, 100);
+    CHECK(fd >= 0);
+#define FRESH() do { memset(&d, 0, sizeof(d)); d.kind = WIN_DLG_SAVE; d.id = 7; strlcpy(d.dir, "/usb1p1", sizeof(d.dir)); \
+                     strlcpy(d.name, "cat.png", sizeof(d.name)); strlcpy(d.types, "png bmp", sizeof(d.types)); } while(0)
+    CHECK(sys_winctl(fd, WIN_DIALOG, NULL) == -EFAULT);
+    bad_lo = guard;
+    bad_hi = guard + sizeof(guard);
+    CHECK(sys_winctl(fd, WIN_DIALOG, guard) == -EFAULT);
+    bad_lo = bad_hi = NULL;
+    FRESH();
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);   /* good, from a window without the focus */
+    for(i = WIN_DLG_OPEN; i <= WIN_DLG_FOLDER; i++) {
+        d.kind = (unsigned)i;
+        CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);
+    }
+    d.kind = 0;
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    d.kind = WIN_DLG_FOLDER + 1;
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    FRESH();
+    d.dir[0] = 0;                                       /* the desktop's choice */
+    d.name[0] = 0;
+    d.types[0] = 0;
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);
+    FRESH();
+    strlcpy(d.dir, "usb1p1", sizeof(d.dir));            /* not absolute */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    FRESH();
+    strlcpy(d.dir, "/usb1p1/a\tb", sizeof(d.dir));      /* a control character */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    FRESH();
+    memset(d.dir, 'a', sizeof(d.dir));                  /* no NUL */
+    d.dir[0] = '/';
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    FRESH();
+    strlcpy(d.name, "pics/cat.png", sizeof(d.name));    /* a name, not a path */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    FRESH();
+    memset(d.name, 'n', sizeof(d.name));
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    FRESH();
+    d.flags = 1;                                        /* 11/05/26 (the review): room to grow, 0 now */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    d.flags = 0x80000000u;
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    FRESH();
+    strlcpy(d.types, "png,bmp", sizeof(d.types));
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, ".png", sizeof(d.types));
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, "abcdefghijklmnop", sizeof(d.types));      /* 16 letters */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, "abcdefghijklmno", sizeof(d.types));       /* 15 */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);
+    strlcpy(d.types, "a b c d e f g h i j k l m n o p q", sizeof(d.types));   /* 17 types */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, "  a b  c d e f g H i j k l m n o P  ", sizeof(d.types)); /* 16, spaces anywhere, any case */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);
+    strlcpy(d.types, "c h =Makefile =README.txt =.profile =a-b_c", sizeof(d.types));   /* whole names */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);
+    strlcpy(d.types, "=Makefile.in.backup1", sizeof(d.types));  /* 19 characters */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, "png =", sizeof(d.types));                 /* a name that is none */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, "=a/b", sizeof(d.types));
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, "=a=b", sizeof(d.types));
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, "tar.gz", sizeof(d.types));                /* an extension is letters and digits only */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    strlcpy(d.types, "png\tbmp", sizeof(d.types));
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    memset(d.types, 'p', sizeof(d.types));
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    memset(d.types, ' ', sizeof(d.types));              /* only spaces, no NUL */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EINVAL);
+    d.types[sizeof(d.types) - 1] = 0;                   /* the NUL in the last byte: an empty list */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);
+    memset(d.types, 0, sizeof(d.types));                /* 16 of 8 characters: 143 bytes and the NUL */
+    memcpy(d.types, "abcdefgh", 8);
+    for(i = 1; i < WIN_TYPES; i++) memcpy(d.types + 8 + 9 * (i - 1), " =abcdefg", 9);
+    CHECK(strlen(d.types) == sizeof(d.types) - 1 && sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);
+    {                                                   /* the shared parser's list, as the desktop gets it */
+        char out[WIN_TYPES][WIN_TYPE_LEN + 2];
+        CHECK(win_types(" PNG =Makefile bmp ", 20, out) == 3 && !strcmp(out[0], "png") && !strcmp(out[1], "=makefile") &&
+              !strcmp(out[2], "bmp"));
+        CHECK(win_types("", 1, out) == 0 && win_types("png", 3, out) == -1 && win_types("png", 4, out) == 1);
+    }
+    FRESH();
+    memset(d.title, 'T', sizeof(d.title));              /* a title with no NUL is cut, as a window's */
+    CHECK(sys_winctl(fd, WIN_DIALOG, &d) == -EACCES);
+    k = d;
+    CHECK(dialog_args(&d, &k) == 0 && strlen(k.title) == WIN_TITLE_MAX - 1 && k.id == 7);
+    CHECK(sys_winctl(fd + 1, WIN_DIALOG, &d) == -EBADF);
+#undef FRESH
+    end();
+}
+
+/**** 11/05/26 (track desk, stage 2): the calls and their desktop's side ****/
+
+static void test_menus_set(void) {
+    struct win_menu_item it[4];
+    struct win_state st;
+    struct win_view view;
+    const struct win_menu_item *lent;
+    int fd, h, alive;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    CHECK(fd >= 0 && h >= 0);
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && !view.menu && !view.menus && st.menu_serial == 0);
+    it[0] = mi(10, WIN_MENU_TITLE, "Game", "");
+    it[1] = mi(11, 0, "New", "F2");
+    it[2] = mi(12, WIN_MENU_SEPARATOR, "", "");
+    it[3] = mi(13, WIN_MENU_CHECKED, "Large", "");
+    CHECK(menu_call(fd, it, 4) == 0);
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && view.menus == 4 && st.menu_serial == 1);   /* lent, as pixels are */
+    CHECK(view.menu[0].id == 10 && !strcmp(view.menu[1].label, "New") && !strcmp(view.menu[1].keys, "F2") &&
+          view.menu[3].flags == WIN_MENU_CHECKED);
+    lent = view.menu;
+    it[3].flags = 0;                                    /* sent again whole: the desktop keeps the copy it has */
+    CHECK(menu_call(fd, it, 4) == 0);
+    CHECK(lent[3].flags == WIN_MENU_CHECKED && win_of_fd(prog, fd)->menu_view->refs == 1);    /* (its alone) */
+    as(desktop);
+    alive = live;
+    CHECK(win_update(h, &st, &view) == 0 && st.menu_serial == 2 && view.menus == 4 && !view.menu[3].flags &&
+          live == alive - 1);                           /* until its next update: the copy before goes then */
+    CHECK(menu_call(fd, it, 0) == 0);                   /* none: taken away */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && !view.menu && !view.menus && st.menu_serial == 3 && live == alive - 2);
+    CHECK(menu_call(fd, it, 4) == 0);
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && view.menus == 4);
+    win_close(h);                                       /* the desktop's end of it: both copies go */
+    CHECK(!win_of_fd(prog, fd)->menu && !win_of_fd(prog, fd)->menu_view && menu_call(fd, it, 4) == -EPIPE);
+    fd = open_as(prog, 200, 100);                       /* the program's end: its copy goes, the desktop's */
+    h = shown(prog, fd);                                /* stays until it lets the window go */
+    CHECK(menu_call(fd, it, 4) == 0);
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && view.menus == 4);
+    as(prog);
+    fd_close(fd);
+    as(desktop);
+    CHECK(view.menu[1].id == 11 && win_update(h, &st, &view) == -EPIPE);
+    win_close(h);
+    end();
+}
+
+static void test_paste(void) {
+    static char big[WIN_CLIP_MAX + 16], back[WIN_CLIP_MAX + 1];
+    struct win_buffer b;
+    struct win_clip c;
+    char buf[16], guard[16], out[16];
+    int fd, h, fd2, h2, n, alive;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    b.buf = buf;
+    b.size = sizeof(buf);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == -EACCES);    /* no focus: nothing read */
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    as(prog);
+    memset(buf, 'x', sizeof(buf));
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == 0 && buf[0] == 0);  /* the desktop gave nothing: empty */
+    as(desktop);
+    CHECK(win_paste_give("hello", 5) == 0);
+    as(prog);
+    memset(buf, 'x', sizeof(buf));
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == 5 && !strcmp(buf, "hello"));     /* with its NUL */
+    b.size = 0;                                         /* how long, nothing copied */
+    b.buf = NULL;
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == 5);
+    b.buf = buf;
+    b.size = 4;                                         /* too small: nothing copied */
+    memset(buf, 'x', sizeof(buf));
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == -ENOSPC && buf[0] == 'x');
+    b.size = 5;                                         /* exactly: the bytes, no NUL */
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == 5 && !memcmp(buf, "hello", 5) && buf[5] == 'x');
+    bad_lo = guard;                                     /* not the program's to write */
+    bad_hi = guard + sizeof(guard);
+    b.buf = guard;
+    b.size = sizeof(guard);
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == -EFAULT);
+    bad_lo = bad_hi = NULL;
+    as(desktop);                                        /* text only: to a NUL; at most WIN_CLIP_MAX */
+    CHECK(win_paste_give("ab\0cd", 5) == 0);
+    as(prog);
+    b.buf = buf;
+    b.size = sizeof(buf);
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == 2 && !strcmp(buf, "ab"));
+    memset(big, 'q', sizeof(big));
+    as(desktop);
+    CHECK(win_paste_give(big, sizeof(big)) == 0);
+    as(prog);
+    b.buf = back;
+    b.size = sizeof(back);
+    n = sys_winctl(fd, WIN_PASTE, &b);
+    CHECK(n == (int)WIN_CLIP_MAX && back[0] == 'q' && back[WIN_CLIP_MAX - 1] == 'q' && back[WIN_CLIP_MAX] == 0);
+    b.size = WIN_CLIP_MAX;                              /* a buffer of WIN_CLIP_MAX always takes it */
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == (int)WIN_CLIP_MAX);
+    as(desktop);
+    alive = live;
+    fail_in = 1;                                        /* no memory for the new copy: the one before stays */
+    CHECK(win_paste_give("new", 3) == -ENOMEM && live == alive);
+    CHECK(win_paste_give("", 0) == 0 && live == alive - 1);   /* empty: no copy at all */
+    as(prog);
+    b.buf = buf;
+    b.size = sizeof(buf);
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == 0);
+    as(other);
+    CHECK(win_paste_give("x", 1) == -ENODEV);           /* a task without a desktop */
+    /* a copy held by a paste under way outlives the copy that replaces it (struct paste's count) */
+    as(desktop);
+    CHECK(win_paste_give("first", 5) == 0);
+    {
+        struct paste *held = desks[0].paste;
+        held->refs++;                                   /* as paste() holds it while it copies */
+        CHECK(win_paste_give("second", 6) == 0 && live == alive + 1);  /* both alive */
+        CHECK(desks[0].paste != held && !memcmp(desks[0].paste->text, "second", 6));
+        kfree(paste_put(held));                         /* the paste's end frees it */
+        CHECK(live == alive);
+    }
+    fd2 = open_as(prog, 40, 30);                        /* another window, not focused: refused */
+    as(prog);
+    CHECK(fd2 >= 0 && sys_winctl(fd2, WIN_PASTE, &b) == -EACCES);
+    /* 11/05/26 (the review): the window's own Copy that the desktop has not taken yet is newer than the copy it gave:
+       a paste gets that; the desktop's taking it makes it the copy at once; another window's is not the clipboard's
+       (that window lost the focus: the desktop drops it) */
+    as(desktop);
+    CHECK(win_paste_give("given", 5) == 0);
+    c.text = "mine";
+    c.len = 4;
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == 4 && !strcmp(buf, "mine"));
+    as(desktop);
+    CHECK(win_clip_take(h, out, sizeof(out)) == 4 && !memcmp(out, "mine", 4));
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == 4 && !strcmp(buf, "mine"));     /* before the desktop gives it again */
+    as(desktop);
+    CHECK(win_paste_give("mine", 4) == 0);
+    h2 = shown(prog, fd2);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);           /* copied, and the focus goes to the other window */
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 0);
+    send_ev(h2, WIN_EV_FOCUS, 0, 0, 1);
+    as(desktop);
+    CHECK(win_paste_give("theirs", 6) == 0);
+    as(prog);
+    CHECK(sys_winctl(fd2, WIN_PASTE, &b) == 6 && !strcmp(buf, "theirs"));
+    as(desktop);
+    CHECK(win_clip_take(h2, out, sizeof(out)) == 0);    /* dropped */
+    as(prog);
+    CHECK(sys_winctl(fd2, WIN_PASTE, &b) == 6 && !strcmp(buf, "theirs"));
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == -EACCES);    /* the focus gone */
+    as(desktop);
+    win_close(h);
+    win_close(h2);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_PASTE, &b) == -EPIPE);
+    end();
+}
+
+static int ask(int fd, unsigned kind, unsigned id, const char *dir) {
+    struct win_dialog d;
+    memset(&d, 0, sizeof(d));
+    d.kind = kind;
+    d.id = id;
+    strlcpy(d.dir, dir, sizeof(d.dir));
+    strlcpy(d.types, "png", sizeof(d.types));
+    strlcpy(d.title, "Open a picture", sizeof(d.title));
+    as(prog);
+    return sys_winctl(fd, WIN_DIALOG, &d);
+}
+
+static int take_path(int fd, char *buf, unsigned size) {
+    struct win_buffer b;
+    b.buf = buf;
+    b.size = size;
+    as(prog);
+    return sys_winctl(fd, WIN_TAKE, &b);
+}
+
+static void test_dialogs(void) {
+    struct win_dialog got;
+    struct win_state st;
+    struct win_view view;
+    struct win_event ev[8];
+    char path[WIN_PATH_MAX], small[8], guard[32], longest[WIN_PATH_MAX + 1];
+    u32 no, no2;
+    int fd, h, n, alive;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'o');
+    CHECK(ask(fd, WIN_DLG_OPEN, 5, "/usb1p1") == -EACCES);     /* no focus: no chooser over another's keys */
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    readev(prog, fd, ev, sizeof(ev));                   /* (the events so far) */
+    CHECK(ask(fd, WIN_DLG_OPEN, 5, "/usb1p1") == 0);    /* the key came since: it may ask */
+    CHECK(ask(fd, WIN_DLG_SAVE, 6, "/usb1p1") == -EBUSY);      /* one at a time */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && st.dialog == 1);
+    CHECK(win_dialog_take(h + WIN_MAX, &got, &no) == -EINVAL);
+    memset(&got, 0, sizeof(got));
+    CHECK(win_dialog_take(h, &got, &no) == 0 && no && got.kind == WIN_DLG_OPEN && got.id == 5 &&
+          !strcmp(got.dir, "/usb1p1") && !strcmp(got.types, "png") && !strcmp(got.title, "Open a picture"));
+    CHECK(win_update(h, &st, &view) == 0 && st.dialog == 0 && win_dialog_take(h, &got, &no2) == -ENOENT);
+    CHECK(ask(fd, WIN_DLG_OPEN, 7, "") == -EBUSY);      /* taken, not answered: still one */
+    CHECK(take_path(fd, path, sizeof(path)) == -ENOENT);
+    as(desktop);
+    CHECK(win_dialog_answer(h, no, "relative/x.png") == -EINVAL);  /* a path that is none */
+    memset(longest, 'a', sizeof(longest));
+    longest[0] = '/';
+    longest[WIN_PATH_MAX] = 0;
+    CHECK(win_dialog_answer(h, no, longest) == -EINVAL);
+    CHECK(win_dialog_answer(h, no + 1, "/usb1p1/sea.png") == -EINVAL);    /* by its number only */
+    CHECK(win_dialog_answer(h, no, "/usb1p1/sea.png") == 0);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == (int)sizeof(ev[0]) && ev[0].type == WIN_EV_DIALOG && ev[0].value == 1 && ev[0].x == 5);
+    as(desktop);
+    CHECK(win_dialog_answer(h, no, "/usb1p1/sea.png") == -EINVAL);    /* answered already */
+    CHECK(take_path(fd, small, sizeof(small)) == -ENOSPC);     /* too small: it stays */
+    bad_lo = guard;
+    bad_hi = guard + sizeof(guard);
+    CHECK(take_path(fd, guard, sizeof(guard)) == -EFAULT);     /* not the program's to write: it stays */
+    bad_lo = bad_hi = NULL;
+    CHECK(take_path(fd, path, 16) == 15 && !strcmp(path, "/usb1p1/sea.png"));     /* the length and its NUL */
+    CHECK(take_path(fd, path, sizeof(path)) == -ENOENT);       /* taken */
+    /* the next request needs something the user did in the window since this one (11/05/26, the review): a program
+       that asks again at each answer cannot hold the desktop's keys */
+    CHECK(ask(fd, WIN_DLG_FOLDER, 8, "/") == -EACCES);
+    send_ev(h, WIN_EV_POINTER, 10, 10, 0);              /* a move is nothing, nor the wheel */
+    send_ev(h, WIN_EV_WHEEL, 10, 10, 1);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    CHECK(ask(fd, WIN_DLG_FOLDER, 8, "/") == -EACCES);
+    send_ev(h, WIN_EV_POINTER, 10, 10, WIN_BUTTON_LEFT);    /* a press is */
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_FOLDER, 8, "/") == 0);
+    /* cancelled: no path */
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no2) == 0 && no2 != no && win_dialog_answer(h, no2, NULL) == 0);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == (int)sizeof(ev[0]) && ev[0].type == WIN_EV_DIALOG && ev[0].value == 0 && ev[0].x == 8);
+    CHECK(take_path(fd, path, sizeof(path)) == -ENOENT && win_of_fd(prog, fd)->ask == NULL);
+    /* (the review of stage 2) a path not taken keeps the next WIN_DIALOG at -EBUSY until it is taken; a menu's item
+       chosen is the user's doing too */
+    send_ev(h, WIN_EV_MENU, 1, 0, 2);
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_SAVE, 9, "/") == 0);
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, "/a.png") == 0);
+    readev(prog, fd, ev, sizeof(ev));
+    send_ev(h, WIN_EV_KEY, 0, 0, 's');
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_SAVE, 10, "/") == -EBUSY && win_of_fd(prog, fd)->input);      /* the input kept */
+    CHECK(take_path(fd, path, sizeof(path)) == 6 && !strcmp(path, "/a.png"));
+    alive = live;
+    CHECK(ask(fd, WIN_DLG_SAVE, 10, "/") == 0 && live == alive + 1);   /* the request's copy */
+    CHECK(take_path(fd, path, sizeof(path)) == -ENOENT);
+    /* no memory for the path: answered as cancelled */
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0);
+    fail_in = 1;
+    CHECK(win_dialog_answer(h, no, "/b.png") == -ENOMEM);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == (int)sizeof(ev[0]) && ev[0].type == WIN_EV_DIALOG && ev[0].value == 0 && ev[0].x == 10);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'o');
+    readev(prog, fd, ev, sizeof(ev));
+    fail_in = 1;                                        /* nor for the request's copy: what the user did stays */
+    CHECK(ask(fd, WIN_DLG_OPEN, 11, "/") == -ENOMEM && !win_of_fd(prog, fd)->asking && win_of_fd(prog, fd)->input);
+    /* the desktop lets the window go: a request that waits is answered (cancelled), in its place */
+    CHECK(ask(fd, WIN_DLG_OPEN, 12, "/") == 0);
+    as(desktop);
+    win_close(h);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == (int)sizeof(ev[0]) && ev[0].type == WIN_EV_DIALOG && ev[0].value == 0 && ev[0].x == 12);
+    CHECK(ask(fd, WIN_DLG_OPEN, 13, "/") == -EPIPE && take_path(fd, path, sizeof(path)) == -ENOENT);
+    CHECK(win_dialog_answer(h, no, "/c.png") == -EINVAL);   /* let go: nobody to answer */
+    /* a path chosen just before the hang-up is not lost: WIN_TAKE works after it, as WIN_INFO does */
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    send_ev(h, WIN_EV_KEY, 0, 0, 's');
+    CHECK(ask(fd, WIN_DLG_SAVE, 14, "/") == 0);
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, "/e.png") == 0);
+    win_close(h);
+    CHECK(take_path(fd, path, sizeof(path)) == 6 && !strcmp(path, "/e.png"));
+    /* the program's end: a request and a path go with it */
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'o');
+    CHECK(ask(fd, WIN_DLG_OPEN, 15, "/") == 0);
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, "/f.png") == 0);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'o');
+    CHECK(ask(fd, WIN_DLG_OPEN, 16, "/") == -EBUSY);    /* the path not taken: it goes with the window */
+    as(prog);
+    fd_close(fd);
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == -ENOENT && win_dialog_answer(h, no, "/d.png") == -EINVAL);
+    win_close(h);
+    end();
+}
+
+/**** 11/05/26 (track desk): the review of stage 2's probes (K1-K5), and the close button's rule ****/
+
+/* K1: a press is the user's doing; an event that says the pointer left (x, y -1) with a button held from a click
+   elsewhere (the desktop's chooser over the window) is none, nor a button held on */
+static void test_dialog_press(void) {
+    struct win_dialog got;
+    struct win_event ev[8];
+    u32 no;
+    int fd, h;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'o');                  /* the user's Ctrl+O */
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_OPEN, 1, "/") == 0);
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, NULL) == 0);    /* Cancel clicked */
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_OPEN, 2, "/") == -EACCES);
+    send_ev(h, WIN_EV_POINTER, -1, -1, WIN_BUTTON_LEFT);    /* the button still down from the Cancel click */
+    CHECK(ask(fd, WIN_DLG_OPEN, 3, "/") == -EACCES);
+    send_ev(h, WIN_EV_POINTER, 5, 5, WIN_BUTTON_LEFT);  /* held on, now over it: no new button */
+    CHECK(ask(fd, WIN_DLG_OPEN, 3, "/") == -EACCES);
+    send_ev(h, WIN_EV_POINTER, 5, 5, 0);
+    send_ev(h, WIN_EV_POINTER, 5, 5, WIN_BUTTON_RIGHT); /* a press: a button the event before did not have */
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_OPEN, 4, "/") == 0);
+    as(desktop);
+    win_close(h);
+    end();
+}
+
+/* K2: WIN_TAKE gives the path of the answer read last: a second request waits until the first's path is taken; a
+   cancelled answer leaves none and keeps nothing waiting */
+static void test_take_bound(void) {
+    struct win_dialog got;
+    struct win_event ev[8];
+    char path[WIN_PATH_MAX];
+    u32 no;
+    int fd, h, n;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'o');
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_OPEN, 1, "/") == 0);          /* request 1: Open */
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, "/usb1p1/open-me.txt") == 0);
+    send_ev(h, WIN_EV_KEY, 0, 0, 's');                  /* the user's Ctrl+S, after the answer */
+    CHECK(ask(fd, WIN_DLG_SAVE, 2, "/") == -EBUSY);     /* asked before its events are read: not yet */
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == 2 * (int)sizeof(ev[0]) && ev[0].type == WIN_EV_DIALOG && ev[0].x == 1 && ev[0].value == 1);
+    CHECK(take_path(fd, path, sizeof(path)) == 19 && !strcmp(path, "/usb1p1/open-me.txt"));    /* request 1's */
+    CHECK(ask(fd, WIN_DLG_SAVE, 2, "/") == 0);          /* the Ctrl+S still counts */
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, NULL) == 0);    /* cancelled */
+    send_ev(h, WIN_EV_KEY, 0, 0, 's');
+    CHECK(ask(fd, WIN_DLG_SAVE, 3, "/") == 0);          /* no path: nothing keeps it waiting */
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, "/usb1p1/save-here.txt") == 0);
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(take_path(fd, path, sizeof(path)) == 21 && !strcmp(path, "/usb1p1/save-here.txt"));
+    as(desktop);
+    win_close(h);
+    end();
+}
+
+/* K3: theme changes one after another: one WIN_EV_THEME waits at most, the newest */
+static void test_theme_merged(void) {
+    static const u32 c[WIN_COLORS];
+    struct win_theme t;
+    struct win_event ev[4];
+    int fd, h, i, n;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_THEME, &t) == 0 && !win_of_fd(prog, fd)->ev_count);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'k');
+    as(desktop);
+    for(i = 0; i < 100; i++) win_theme_set((u32)(i & 1), c);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'l');
+    CHECK(win_of_fd(prog, fd)->ev_count == 3 && win_of_fd(prog, fd)->lost == 0);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == 3 * (int)sizeof(ev[0]) && ev[0].value == 'k' && ev[1].type == WIN_EV_THEME && ev[1].value == 1 &&
+          ev[2].value == 'l');
+    as(desktop);
+    win_close(h);
+    end();
+}
+
+/* K4: WIN_TAKE's refusals in their order: the buffer first, then whether a path waits, then its room */
+static void test_take_order(void) {
+    char guard[16], small[4];
+    struct win_buffer b;
+    int fd;
+    begin();
+    fd = open_as(prog, 200, 100);
+    bad_lo = guard;
+    bad_hi = guard + sizeof(guard);
+    b.buf = guard;
+    b.size = sizeof(guard);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_TAKE, &b) == -EFAULT);     /* no path waiting, and a buffer not its own: -EFAULT */
+    bad_lo = bad_hi = NULL;
+    CHECK(sys_winctl(fd, WIN_TAKE, &b) == -ENOENT);
+    b.buf = small;
+    b.size = sizeof(small);
+    win_of_fd(prog, fd)->answer = (char *)kalloc(8);    /* a path waiting, longer than the room */
+    strlcpy(win_of_fd(prog, fd)->answer, "/a.txt", 8);
+    CHECK(sys_winctl(fd, WIN_TAKE, &b) == -ENOSPC && win_of_fd(prog, fd)->answer);
+    end();                                              /* (the path goes with the window) */
+}
+
+/* K5: the answer's kept place on the hang-up paths: 63 events queued, a request waiting, then the desktop's close of
+   the window, or its death: the cancel still comes, last */
+static void test_hangup_full(int death) {
+    struct win_event ev[WIN_EVENTS];
+    int fd, h, i, n;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    for(i = 0; i < WIN_EVENTS - 2; i++) send_ev(h, WIN_EV_KEY, 0, 0, 'a');     /* 63 with the focus */
+    CHECK(ask(fd, WIN_DLG_OPEN, 9, "/") == 0);
+    for(i = 0; i < 5; i++) send_ev(h, WIN_EV_KEY, 0, 0, 'b');                  /* lost: the last place is kept */
+    CHECK(win_of_fd(prog, fd)->lost == 5);
+    as(desktop);
+    if(death) reap(desktop);
+    else win_close(h);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == (int)sizeof(ev) && ev[WIN_EVENTS - 1].type == WIN_EV_DIALOG && ev[WIN_EVENTS - 1].x == 9 &&
+          ev[WIN_EVENTS - 1].value == 0 && ev[WIN_EVENTS - 2].value == 'a');
+    CHECK(readev(prog, fd, ev, sizeof(ev)) == 0);       /* then the end */
+    end();
+}
+
+/* the close button's rule (shell/guiclient.c): the desktop sees whether a WIN_EV_CLOSE waits unread */
+static void test_close_waiting(void) {
+    struct win_state st;
+    struct win_view view;
+    struct win_event ev[4];
+    int fd, h;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && !st.close_waiting);
+    send_ev(h, WIN_EV_CLOSE, 0, 0, 0);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'x');
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && st.close_waiting);
+    readev(prog, fd, ev, sizeof(ev[0]));                /* the CLOSE read, the key not yet */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && !st.close_waiting);
+    win_close(h);
+    end();
+}
+
+/* K6 (the second review, N1): a stuck program's full queue (typed at) refuses the CLOSE; win_update() says one waits
+   all the same, until the program reads again, and the next CLOSE has a place then */
+static void test_close_lost(void) {
+    struct win_state st;
+    struct win_view view;
+    struct win_event ev[4];
+    int fd, h, i, r;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    for(i = 0; i < WIN_EVENTS; i++) send_ev(h, WIN_EV_KEY, 0, 0, 'k');       /* a stuck program, typed at */
+    r = send_ev(h, WIN_EV_CLOSE, 0, 0, 0);
+    as(desktop);
+    CHECK(r == -EAGAIN && win_of_fd(prog, fd)->lost == 1);
+    CHECK(win_update(h, &st, &view) == 0 && st.close_waiting);
+    CHECK(win_update(h, &st, &view) == 0 && st.close_waiting);         /* until it reads */
+    readev(prog, fd, ev, sizeof(ev[0]));                /* it reads again: one key */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && !st.close_waiting);
+    CHECK(send_ev(h, WIN_EV_CLOSE, 0, 0, 0) >= 0);      /* the next press: queued, and waits unread */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && st.close_waiting && win_of_fd(prog, fd)->lost == 1);
+    win_close(h);
+    end();
+}
+
+/* 11/05/26 (the review): an answer always comes: its place in the queue is kept while the request waits, and a request
+   with no place for it is refused until the events are read */
+static void test_dialog_queue(void) {
+    struct win_dialog got;
+    struct win_event ev[WIN_EVENTS];
+    u32 no;
+    int fd, h, i, n;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    for(i = 0; i < WIN_EVENTS; i++) send_ev(h, WIN_EV_KEY, 0, 0, 'a');     /* full: the last one lost */
+    CHECK(win_of_fd(prog, fd)->ev_count == WIN_EVENTS && win_of_fd(prog, fd)->lost == 1);
+    CHECK(ask(fd, WIN_DLG_OPEN, 1, "/") == -EAGAIN);    /* no place for its answer */
+    CHECK(readev(prog, fd, ev, 2 * sizeof(ev[0])) == 2 * (int)sizeof(ev[0]));
+    CHECK(ask(fd, WIN_DLG_OPEN, 1, "/") == 0);
+    CHECK(send_ev(h, WIN_EV_KEY, 0, 0, 'b') == 0);     /* one more fits; then the last place is the answer's */
+    CHECK(send_ev(h, WIN_EV_KEY, 0, 0, 'c') == -EAGAIN && send_ev(h, WIN_EV_THEME, 0, 0, 1) == -EAGAIN);
+    CHECK(win_of_fd(prog, fd)->ev_count == WIN_EVENTS - 1);
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, NULL) == 0);
+    CHECK(win_of_fd(prog, fd)->ev_count == WIN_EVENTS);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == (int)sizeof(ev) && ev[WIN_EVENTS - 2].value == 'b' && ev[WIN_EVENTS - 1].type == WIN_EV_DIALOG &&
+          ev[WIN_EVENTS - 1].x == 1);
+    CHECK(send_ev(h, WIN_EV_KEY, 0, 0, 'd') == 0);     /* answered: every place is the events' again */
+    as(desktop);
+    win_close(h);
+    end();
+}
+
+static void test_themes(void) {
+    static const u32 dusk[WIN_COLORS] = { 0x142638, 0xF4F1E6, 0x153D49, 0x6C888C, 0x197D83, 0xF4F1E6, 0xE7E2D2, 0xDEE3D8,
+                                          0xC9CFC4, 0xBFE3DD, 0xFFFDF5, 0x153D49, 0x102E3B, 0xB8E9D9, 0xEE906D, 0xA3B4B3 };
+    struct win_theme t;
+    struct win_event ev[8];
+    int fd, fd2, h, h2, n;
+    begin();
+    fd = open_as(prog, 200, 100);                       /* one that asks WIN_THEME, one that never does */
+    fd2 = open_as(prog, 100, 50);
+    h = shown(prog, fd);
+    h2 = shown(prog, fd2);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_THEME, &t) == 0 && t.theme == WIN_THEME_OCEAN);
+    readev(prog, fd, ev, sizeof(ev));
+    readev(prog, fd2, ev, sizeof(ev));
+    as(desktop);
+    CHECK(win_theme_set(2, dusk) == -EINVAL);
+    CHECK(win_theme_set(WIN_THEME_DUSK, dusk) == 0);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == (int)sizeof(ev[0]) && ev[0].type == WIN_EV_THEME && ev[0].value == WIN_THEME_DUSK);
+    CHECK(pollw(prog, fd2) == POLLOUT);                 /* nothing for the one that never asked */
+    as(prog);
+    CHECK(sys_winctl(fd2, WIN_THEME, &t) == 0 && t.theme == WIN_THEME_DUSK && t.colors[WIN_COLOR_DESKTOP] == 0x142638);
+    fd_close(fd2);                                      /* a window opened now has the desktop's */
+    as(desktop);
+    win_close(h2);
+    fd2 = open_as(prog, 100, 50);
+    as(prog);
+    CHECK(sys_winctl(fd2, WIN_THEME, &t) == 0 && t.theme == WIN_THEME_DUSK);
+    as(desktop);
+    win_close(h);                                       /* let go: the last it had */
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_THEME, &t) == 0 && t.theme == WIN_THEME_DUSK && t.colors[WIN_COLOR_DESKTOP] == 0x142638);
+    as(other);
+    CHECK(win_theme_set(WIN_THEME_OCEAN, dusk) == -ENODEV);
+    end();
+}
+
 int main(void) {
     test_queue();
     test_titles();
@@ -1134,6 +2131,25 @@ int main(void) {
     test_title_calls();
     test_foreground();
     test_clip_alert();
+    test_theme();                                       /* 11/05/26 (track desk, stage 1) */
+    test_menu_args();
+    test_menu_text();                                   /* 11/05/26 (the review of the ABI) */
+    test_menu_shape();
+    test_paste_take_args();
+    test_dialog_args();
+    test_menus_set();                                   /* 11/05/26 (track desk, stage 2) */
+    test_paste();
+    test_dialogs();
+    test_dialog_queue();
+    test_dialog_press();                                /* 11/05/26 (the review of stage 2) */
+    test_take_bound();
+    test_theme_merged();
+    test_take_order();
+    test_hangup_full(0);
+    test_hangup_full(1);
+    test_close_waiting();
+    test_close_lost();                                  /* 11/09/26 (the second review) */
+    test_themes();
     printf("test_win: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;
 }

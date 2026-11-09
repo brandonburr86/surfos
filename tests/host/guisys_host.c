@@ -112,6 +112,23 @@ int guisys_win_event(void *ctx, int h, const struct win_event *e) { (void)ctx; (
 void guisys_win_close(void *ctx, int h) { (void)ctx; (void)h; }
 int guisys_win_run(void *ctx, const char *line, char *msg, size_t n) { (void)ctx; (void)line; (void)msg; (void)n; return -ENOSYS; }
 int guisys_win_clip(void *ctx, int h, char *out, size_t n) { (void)ctx; (void)h; (void)out; (void)n; return 0; }   /* 10/26/26 */
+/* 11/05/26 (the desktop applications, track desk): nor their menus, choosers, theme, files and preferences */
+int guisys_win_paste(void *ctx, const char *text, u32 len) { (void)ctx; (void)text; (void)len; return 0; }
+int guisys_win_dialog(void *ctx, int h, struct win_dialog *out, u32 *no) { (void)ctx; (void)h; (void)out; (void)no; return -ENOENT; }
+int guisys_win_answer(void *ctx, int h, u32 no, const char *path) { (void)ctx; (void)h; (void)no; (void)path; return -EINVAL; }
+int guisys_win_theme(void *ctx, int theme, const u32 *colors) { (void)ctx; (void)theme; (void)colors; return 0; }
+int guisys_run_file(void *ctx, const char *program, const char *arg, char *msg, size_t n) {
+    (void)ctx; (void)program; (void)arg; (void)msg; (void)n;
+    return -ENOSYS;
+}
+void guisys_note(void *ctx, const char *line) { (void)ctx; (void)line; }
+int guisys_prefs(void *ctx, int *theme, int *speed) { (void)ctx; *theme = 0; *speed = 1; return 0; }
+int guisys_pref_set(void *ctx, int which, int value, char *msg, size_t n) {
+    (void)ctx; (void)which; (void)value; (void)msg; (void)n;
+    return -1;
+}
+struct gui_end;                                 /* 11/09/26: nor the ends of the programs a desktop started */
+int guisys_ended(void *ctx, struct gui_end *out, int max) { (void)ctx; (void)out; (void)max; return 0; }
 
 /**** memory: an allocator that can fail ****/
 

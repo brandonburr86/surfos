@@ -309,8 +309,9 @@ def _end_clock(d):
             d.vm.pump(1.0)
             d.click(x + w - 16, y + 14)
             d.vm.pump(1.0)
-            if _shown(d, d.vm.screen(), 'Clock'):       # it asked in its window: pressed again, the desktop asks
-                d.click(x + w - 16, y + 14)
+            if _shown(d, d.vm.screen(), 'Clock'):       # it asked in its window: 11/05/26, pressed again it is asked
+                for _ in range(3):                      # again, and the third press is the desktop's question
+                    d.click(x + w - 16, y + 14)
                 d.vm.pump(0.5)
                 if _dialog(d, d.vm.screen()) == '?':      # "End the program?", Cancel first: End
                     d.key('right')

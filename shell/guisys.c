@@ -168,6 +168,9 @@ static const struct gui_sys kernel_sys = {
     guisys_win_accept, guisys_win_update, guisys_win_event, guisys_win_close,  /* 10/25/26: programs' windows */
     guisys_win_run,                                                             /* the launcher */
     guisys_win_clip,                                                            /* 10/26/26: their clipboard text */
+    guisys_win_paste, guisys_win_dialog, guisys_win_answer,                     /* 11/05/26 (track desk) */
+    guisys_win_theme, guisys_run_file, guisys_note, guisys_prefs, guisys_pref_set,
+    guisys_ended,                                                               /* 11/09/26 */
 };
 
 const struct gui_sys *gui_kernel_sys(void) {

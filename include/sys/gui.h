@@ -16,6 +16,11 @@ which the model calls from its handlers and from gui_tick(), never from gui_rend
 10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): the windows of
 ordinary programs, in GUI_CLIENTS slots after the fixed windows (sys/gui_client.h,
 shell/guiclient.c), through struct gui_sys's win_* calls.
+11/05/26 (the desktop applications, docs/superpowers/plans/2026-11-05-desktop-apps.md, track desk):
+keys with their modifiers for programs' windows (GUI_KEY_SHIFT, GUI_KEY_ALT and GUI_KEY_CTRL on a key,
+gui_state.mods for the pointer), F5 to F12; programs' menus in the bar, the clipboard they paste,
+their choosers and the theme; the application registry (sys/gui_reg.h, shell/guireg.c); screenshots
+(struct gui_shot: the shell captures, the model asks where and saves); the preferences on the stick.
 */
 #ifndef _SYS_GUI_H
 #define _SYS_GUI_H
@@ -60,6 +65,25 @@ shell/guiclient.c), through struct gui_sys's win_* calls.
 #define GUI_INSERT 0x109
 #define GUI_BACKTAB 0x10a               /* 11/1/26: for a program's window only: the desktop's apps have no use for them, */
 #define GUI_SHIFT_ENTER 0x10b           /* shell/gui.c's input_key() keeps them from those */
+/* 11/05/26: F1 to F12 (surfos/win.h's WIN_KEY_F(n)): for a program's window only, as Shift+Tab (F1-F4 never come:
+   they switch consoles); and the modifiers a key goes with to a program's window, above its code: the desktop's
+   own windows get the code alone (gui_key()), as before.
+   11/05/26 (the review): shell/gui.c gives gui_key() "full keys": a character as typed (with Shift, before Ctrl made a
+   control byte of it: Ctrl+S is 's' with GUI_KEY_CTRL), Tab 9, Enter 13, Esc 27, Backspace 127 or a GUI_* key, with
+   the modifiers held and GUI_KEY_REPEAT for the keyboard's repeat (gui_byte_key(), gui_sequence_key(): its terminal's
+   bytes and sequences, tty.h's TTY_RAW_KEYS). A program's window gets them as surfos/win.h's "The keys" says
+   (gui_program_key(): Ctrl+Tab .. Ctrl+Backspace as GUI_CTRL_TAB .. GUI_CTRL_BACKSPACE), the desktop's own windows
+   as they did before (gui_own_key(): the control bytes; none for a key Ctrl made nothing of) */
+#define GUI_F(n) (0x110 + (n))
+#define GUI_CTRL_TAB 0x10c
+#define GUI_CTRL_ENTER 0x10d
+#define GUI_CTRL_ESC 0x10e
+#define GUI_CTRL_BACKSPACE 0x10f
+#define GUI_KEY_MASK 0xFFFF
+#define GUI_KEY_SHIFT (WIN_MOD_SHIFT << 16)
+#define GUI_KEY_ALT (WIN_MOD_ALT << 16)
+#define GUI_KEY_CTRL (WIN_MOD_CTRL << 16)
+#define GUI_KEY_REPEAT (WIN_MOD_REPEAT << 16)
 
 #define GUI_PATH_MAX 256
 #define GUI_NAME_MAX 256
@@ -150,10 +174,15 @@ struct gui_files {
 #define GUI_DLG_OPEN 4
 #define GUI_DLG_SAVE 5
 #define GUI_DLG_RUN 6                   /* 10/25/26: the launcher's: a folder's programs and the line to run */
+#define GUI_DLG_FOLDER 7                /* 11/05/26: a program's Choose folder */
+#define GUI_DIALOG_TITLE 160            /* 11/05/26: a title's bytes (a program's chooser's names its window too) */
+#define GUI_TYPES_MAX 144               /* 11/05/26: a program's chooser's file types (surfos/win.h's WIN_TYPES_MAX) */
 struct gui_dialog {
     int kind, act, choice;
+    char types[GUI_TYPES_MAX];          /* 11/05/26: the file types a program's chooser is for ("png bmp"), "" all */
     bool list_focus;                    /* a chooser's Enter is for its list, not its name field */
-    char title[48], text[2][80];
+    bool program;                       /* 11/05/26 (the review of stage 2): a program's chooser: no desktop's sign */
+    char title[GUI_DIALOG_TITLE], text[2][80];
     const char *label[3];
     struct gui_field field;
     char dir[GUI_PATH_MAX], target[GUI_PATH_MAX];   /* a chooser's folder; what the action is about */
@@ -170,6 +199,18 @@ struct gui_dialog {
 #include <sys/gui_tools.h>
 #include <sys/gui_media.h>
 #include <sys/gui_client.h>             /* 10/25/26: programs' windows */
+#include <sys/gui_reg.h>                /* 11/05/26: the application registry */
+
+/* 11/05/26: a screenshot. The shell captures the frame once one is WANTED (the frame after the request: a menu its
+   item closed is gone from it), as a 24-bit BMP of its own memory, and hands it over (TAKEN); the model asks where
+   with the Save as chooser (ASKING) when no other dialog is up, saves it through struct gui_fs's write, and lets it
+   go (DONE), which the shell frees */
+#define GUI_SHOT_NONE 0
+#define GUI_SHOT_WANTED 1
+#define GUI_SHOT_TAKEN 2
+#define GUI_SHOT_ASKING 3
+#define GUI_SHOT_DONE 4
+struct gui_shot { int state; const char *data; u32 len; char name[48]; };
 
 struct gui_state {
     int width, height, menu, selection, focus, drag, drag_x, drag_y;
@@ -218,6 +259,22 @@ struct gui_state {
     u32 app_at[GUI_WINDOWS - GUI_FIRST_APP];   /* and when (now); */
     bool app_starting[GUI_WINDOWS - GUI_FIRST_APP];    /* its window has not come yet: the tile pressed again within
                                                          GUI_START_MS starts no second one (a double-click) */
+    /* 11/05/26 (the desktop applications, track desk) */
+    unsigned mods;                      /* the modifiers held as the shell took the pointer's events (WIN_MOD_*) */
+    u32 clip_serial, clip_given;        /* the clipboard's changes (gui_clipped()), and the one given for WIN_PASTE */
+    bool clip_ever;                     /* it was given once */
+    int menu_top;                       /* the first entry shown of a menu taller than the screen */
+    int menu_sub, menu_sub_of;          /* the program's item whose submenu is open (MENU_CLIENT_SUB), and its menu */
+    struct gui_registry reg;            /* /initrd/apps */
+    int theme_given;                    /* the theme the programs' windows were told last (-1: none yet) */
+    int pref_theme, pref_speed;         /* the preferences as the settings said them last (-1: not read yet), */
+    u32 pref_at;                        /* and when (now) */
+    u32 pref_pending, pref_changed;     /* (the review of stage 2) changed here, not written yet (a bit each: the theme,
+                                           the speed), and when the last change was: written once they stand */
+    struct gui_task chooser_tasks[GUI_TASK_MAX];   /* (the review of stage 2) the tasks, read for a chooser's name */
+    char pref_status[GUI_STATUS];       /* what Pointer & desktop's last change did: saved, or why not */
+    struct gui_shot shot;
+    struct gui_volume vols[GUI_VOLUMES];    /* the volumes, read for the screenshot's folder */
 };
 #define GUI_START_MS 2000
 void gui_init(struct gui_state *g, int width, int height);
@@ -231,6 +288,13 @@ void gui_cursor(const struct fb_surface *s, int x, int y, int scale);
    not to the pointer */
 bool gui_wants_arrows(const struct gui_state *g);
 bool gui_wants_shifted(const struct gui_state *g);
+/* 11/05/26: full keys (above): a byte the terminal sent alone, the end of an escape sequence (its number, final byte
+   and xterm's m; 0 for none), and a full key as the desktop's own windows take it (-1: none) or a program's window
+   (its value, and its surfos/win.h WIN_MOD_* bits into *mods) */
+int gui_byte_key(int byte);
+int gui_sequence_key(int number, int final, int m);
+int gui_own_key(int key);
+int gui_program_key(int key, int *mods);
 /* 10/25/26 (the review): an application works without drawing every pass (a picture being read, a Hex search, a
    Terminal's output read but not drawn, keys its session has not taken): the desktop's next pass comes a frame
    later, not after its idle nap */
@@ -244,6 +308,10 @@ void gui_finish(struct gui_state *g);
 /* 10/26/26 (stage C12): and gui_input_done() once a pass's pointer events and keys are in: a program's window that
    asked to be seen comes up then, never under a press of that pass */
 void gui_input_done(struct gui_state *g);
+/* 11/05/26: a screenshot: the shell's Print Screen asks for one (the frame then captured and handed over in
+   g->shot); the theme's colours by role (surfos/win.h's WIN_COLOR_*), for the programs' windows */
+void gui_screenshot(struct gui_state *g);
+void gui_theme_colors(const struct gui_state *g, u32 *colors);
 /* 10/25/26: the largest content a program's window can have here, a maximized one's (shell/gui.c registers it) */
 void gui_client_room(const struct gui_state *g, int *w, int *h);
 const struct gui_fs *gui_kernel_fs(void);       /* shell/guifs.c: the VFS (the kernel only) */

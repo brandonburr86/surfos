@@ -30,9 +30,21 @@ standard PS/2 mouse packets from IRQ 12, demultiplexed from keyboard scan codes.
 and pressed again it resets the machine at once.
 10/26/26 (track C's C8): the IntelliMouse handshake finds a wheel mouse, whose wheel is
 reported with its motion.
+11/05/26 (the desktop applications, track desk): Print Screen (E0 37, also inside its E0 2A E0 37
+with Shift's fake prefix, which the E0 table leaves alone) is remembered for the console that has
+the screen, for its desktop to take (keyboard_print_taken(): a screenshot); it reaches no tty, as
+before. Alt+Print Screen (SysRq, 54) stays unused.
+11/05/26 (the review of the desktop's keys): a tty in TTY_RAW_KEYS (tty.h; the desktop's console)
+gets every key as it is, before Ctrl makes a control byte of it, with its modifiers apart, so that
+Ctrl+Tab is no Ctrl+I and Ctrl+0 is not lost (tty.c encodes them); and a key the keyboard repeats
+while it is held (its make code again with no break between: typematic) goes with KEY_REPEAT.
+11/05/26 (the review of stage 2): the scan codes' E0 prefix and repeat are surfos/keyscan.h's,
+host-tested (tests/host/test_keyscan.c); a byte lost to the controller's error forgets the key
+held, so that its next press is no repeat; Print Screen held down asks for one screenshot.
 */
 
 #include <surfos/keyboard.h>
+#include <surfos/keyscan.h>         /* 11/05/26 (the review of stage 2): the scan codes' prefix and repeat, host-tested */
 #include <surfos/console.h>
 #include <surfos/tty.h>
 #include <asm/io.h>
@@ -47,10 +59,13 @@ reported with its motion.
 #include <blibc_common.h>
 #include <sys/pointer.h>
 #include <sys/ps2mouse.h>
+#include <fs/vfs.h>                     /* 11/05/26: poll_wake(), for Print Screen */
 
 static u_char led_status = NUM_LED;
-static bool shift_l, shift_r, ctrl, alt, e0;
+static bool shift_l, shift_r, ctrl, alt;
 static struct del_key del_key;      /* 10/25/26 (the review of B4): Delete held down, for Ctrl+Alt+Del's presses */
+static const struct tty *print_tty; /* 11/05/26: the console Print Screen was pressed on, until its desktop takes it */
+static struct keyscan scan;         /* 11/05/26: E0, and the key held for its repeat (surfos/keyscan.h) */
 static u_long irqs, polled;
 
 /* status register bits */
@@ -133,6 +148,15 @@ static u_int mods_held(void) {
 
 u_int keyboard_mods(void) { return mods_held(); }
 
+/* 11/05/26: a Print Screen pressed on console t's screen since the last call, taken (the desktop on t: a screenshot) */
+bool keyboard_print_taken(const struct tty *t) {
+    u_long flags = irq_save();
+    bool taken = t && print_tty == t;
+    if(taken) print_tty = NULL;
+    irq_restore(flags);
+    return taken;
+}
+
 static void deliver(u_char c) {
     u_int mods = mods_held();
     if(c >= F1 && c < F1 + NUM_CONSOLES) {      /* F1..Fn: switch console */
@@ -141,7 +165,7 @@ static void deliver(u_char c) {
     }
     if(mods == KEY_SHIFT && console_scroll_key(c)) return;     /* 10/25/26 (A6): the scrollback's keys */
     console_view_live();
-    tty_key(tty_active, c, mods);               /* raw mode turns special keys into escape sequences */
+    tty_key(tty_active, c, mods | (scan.repeat ? KEY_REPEAT : 0));     /* raw mode turns special keys into escape sequences */
 }
 
 static void handle_e0(u_char code) {
@@ -167,21 +191,27 @@ static void handle_e0(u_char code) {
         case DEL_DELETE: deliver(DEL); break;
         }
         return;
-    default: return;                          /* print screen, pause, media keys */
+    case 0x37:                                /* 11/05/26: Print Screen, for the desktop of the console in front */
+        if(!brk && !scan.repeat) {            /* (the review of stage 2: held down, it asks once) */
+            print_tty = tty_active;
+            poll_wake();
+        }
+        return;
+    default: return;                          /* pause, media keys */
     }
 }
 
-/* one byte from the keyboard, from the interrupt or the poll */
-static void keyboard_byte(u_char code) {
+/* one byte from the keyboard, from the interrupt or the poll. 11/05/26: the prefixes and the repeat are
+   surfos/keyscan.h's (E1, pause: its byte ignored, as before) */
+static void keyboard_byte(u_char byte) {
+    int key = keyscan_byte(&scan, byte);
     bool brk, shift;
-    u_char c;
+    u_char c, code;
 
-    if(code == 0xE0) { e0 = true; return; }
-    if(code == 0xE1) { return; }               /* pause: ignore the sequence */
-    if(e0) { e0 = false; handle_e0(code); return; }
-
-    brk = code & 0x80;
-    code &= 0x7F;
+    if(key < 0) return;
+    if(key & KEYSCAN_E0) { handle_e0((u_char)key); return; }
+    brk = key & KEYSCAN_BREAK;
+    code = (u_char)(key & 0x7F);
 
     switch(code) {                             /* modifiers and locks */
     case 0x2A: shift_l = !brk; return;
@@ -203,6 +233,11 @@ static void keyboard_byte(u_char code) {
         else if((led_status & CAPS_LED) && c >= 'A' && c <= 'Z' && shift) c += 32;
     }
     if(!c) return;
+    if(tty_active->raw == TTY_RAW_KEYS) {       /* 11/05/26: the key as it is, its modifiers apart (tty.c) */
+        if(code == 0x0E || code == 0x1C) c = code == 0x0E ? 0x7F : '\r';     /* Backspace and Enter as raw mode's */
+        deliver(c);
+        return;
+    }
     if(ctrl && c < 0x80) {
         if(c >= 'a' && c <= 'z') c -= 32;
         if(c >= '@' && c <= '_') c &= 0x1F;     /* Ctrl-C = 3, Ctrl-U = 21, ... */
@@ -222,7 +257,11 @@ static void keyboard_byte(u_char code) {
 static void i8042_byte(u_char status, u_char byte) {
     if(status & KBD_ERROR) {
         if(status & KBD_AUX) ps2mouse_reset(&mouse);
-        else { e0 = shift_l = shift_r = ctrl = alt = false; del_key.down = false; }
+        else {                                  /* 11/05/26: and the key held is forgotten (its break may be lost) */
+            shift_l = shift_r = ctrl = alt = false;
+            del_key.down = false;
+            keyscan_reset(&scan);
+        }
         return;
     }
     if(status & KBD_AUX) {

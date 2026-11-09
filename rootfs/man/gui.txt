@@ -14,5 +14,12 @@ DESCRIPTION
     show. It reads the keyboard as it goes, so its output cannot go to a
     file.
 
+    Print Screen, or SurfOS > Screenshot, saves the screen as a BMP and
+    asks where. Apps > Programs has the programs of /initrd/apps, and
+    Files opens a file in the one its type belongs to (File > Open with
+    lists every one that takes it). The colours and the pointer's speed
+    are kept in the settings on the stick: desktop.theme and
+    pointer.speed (see settings).
+
 SEE ALSO
     wundertow, wcalc, wclock, wcharmap, touchpad, gfxinfo
