@@ -57,7 +57,9 @@ void gkf_gone(void);                    /* the desktop lets the window go */
 void gkf_advance(unsigned ms);          /* uptime() moves on (11/09/26: and by each wait of poll() that finds nothing:
                                            the toolkit's poll() is the fake's, gkf_poll()) */
 int gkf_forever(void);                  /* polls that would have waited for ever with nothing to come (EINTR) */
-unsigned gkf_lost(void);                /* events lost past WIN_EVENTS, as the kernel loses them (WIN_INFO's lost) */
+unsigned gkf_lost(void);                /* events lost past WIN_EVENTS, as the kernel loses them (WIN_INFO's lost); the
+                                           first loss in a run and the run's count are said on stderr */
+void gkf_flood(int on);                 /* a test that floods the queue on purpose: no word of it (until gkf_reset()) */
 int gkf_queued(void);                   /* events waiting in the window's queue, unread */
 unsigned gkf_clock(void);
 

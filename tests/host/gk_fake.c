@@ -57,6 +57,7 @@ static struct {
     int input;                          /* a key, a press or a menu choice sent since the last chooser asked for */
     unsigned ev_buttons, ev_before;     /* the buttons of the pointer event queued last, and of the one before it */
     unsigned lost;                      /* events lost past WIN_EVENTS (WIN_INFO) */
+    int flood;                          /* a test floods the queue on purpose: no word of the losses (gkf_flood()) */
     int forever;                        /* polls that would have waited for ever */
     char path[WIN_PATH_MAX];
     int themed;
@@ -142,6 +143,27 @@ int gkf_forever(void) {
 
 unsigned gkf_lost(void) {
     return F.lost;
+}
+
+void gkf_flood(int on) {
+    F.flood = on != 0;
+}
+
+/* (the re-review, N8) a loss said on stderr: the first in a run at once, and the run's count at its end, unless the
+   test floods on purpose; what the fake keeps is the same either way */
+static unsigned lost_in_run;
+
+static void lost_total(void) {
+    fprintf(stderr, "gk_fake: %u events lost in all in this run, past the window's queue (WIN_EVENTS)\n", lost_in_run);
+}
+
+static void say_lost(void) {
+    if(F.flood) return;
+    if(!lost_in_run++) {
+        fprintf(stderr, "gk_fake: the window's queue is full (WIN_EVENTS): an event lost, as the kernel loses it; a "
+                "test that types more than %d events reads them between (gkf_lost(), gkf_flood())\n", WIN_EVENTS);
+        atexit(lost_total);
+    }
 }
 
 int gkf_queued(void) {
@@ -679,6 +701,7 @@ static void put_event(unsigned short type, unsigned short mods, int x, int y, un
         else if(n >= WIN_EVENTS - (F.dialog_waiting && type != WIN_EV_DIALOG ? 1 : 0)) {
             F.lost++;
             queued = 0;
+            say_lost();
         } else {
             q[n++] = e;
             if(type == WIN_EV_POINTER) {

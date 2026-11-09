@@ -1390,6 +1390,7 @@ static void fakes(void) {
     gkf_pointer(110, 10, 0);
     CHECK(gkf_queued() == 3);
     run(ui);
+    gkf_flood(1);                                       /* (on purpose: no word of the losses) */
     for(i = 0; i < WIN_EVENTS + 6; i++) gkf_key(WIN_KEY_F11, 0);
     run(ui);
     CHECK(count(GK_EV_KEY) == WIN_EVENTS && gkf_lost() == 6);
@@ -1830,7 +1831,9 @@ static void choosers(void) {
     CHECK(answering(ui));
     for(i = 0; i < WIN_EVENTS; i++) gkf_key(WIN_KEY_F11, 0);   /* (keys: moves would merge, as the kernel merges them) */
     CHECK(gk_choose(ui, 44, WIN_DLG_OPEN, "/", "", "") == 0 && !gkf_dialog());
+    gkf_flood(1);                                       /* (the focus's event finds the queue full: lost, on purpose) */
     gkf_focus(0);
+    gkf_flood(0);
     run(ui);
     CHECK(!gkf_dialog() && heard(GK_EV_CHOSEN, 44) && heard(GK_EV_CHOSEN, 44)->value == 0);
     gkf_focus(1);
