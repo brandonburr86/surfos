@@ -647,9 +647,10 @@ for the programs of the desktop applications, and for any other program with a w
 * **Its choosers.** A program asks for the desktop's Open, Save as or Choose folder chooser
   (`WIN_DIALOG`), only while its window has the focus and after you did something in it (a key, a
   click or a menu's item since its last chooser, so that a program cannot keep one up); the title
-  bar names the program it is for by a name the program cannot set (its title in Apps > Programs,
-  else its program's file name: "Paint: Save as", "wcode: Open a file"), and has no `≋`, which
-  marks only the desktop's own dialogs. It lists the types it names (and the
+  bar names the program it is for by its title in Apps > Programs, else its program's file name,
+  then its pid, which no program chooses (11/09/26: a file name can be, by copying a program):
+  "Paint (pid 41): Save as", "wcode (pid 57): Open a file"; and it has no `≋`, which marks only
+  the desktop's own dialogs. It lists the types it names (and the
   folders), and a Save as name without one of them gets the first. Save as asks before it replaces
   a file and never takes one the desktop takes care of (a `.tmp` beside it, as Notepad's Saving
   says). Choose folder lists the folders: Right or a double-click goes into one, Enter or Choose
@@ -666,7 +667,13 @@ for the programs of the desktop applications, and for any other program with a w
 * **Its close button.** Each press asks the program (`WIN_EV_CLOSE`) while it reads its events, so
   one that asked "Save the changes?" and was told Cancel is asked again at the next press. The
   desktop offers "End the program?" instead when the program has not read the close it was sent
-  (it is stuck, or busy), or at a third press within 3 seconds.
+  (it is stuck, or busy; also when its queue was too full to take it), and at the third press,
+  however slow: two closes read and the window still there. Cancel there starts the count again,
+  so the program's own question comes back at the next press.
+* **A program that ends before its window.** One the desktop started (Apps, a tile, Files, Open
+  with, Run program...) that ends before it opens a window, killed or with a status other than 0,
+  is said in a message ("wpaint (pid 41) ended: status 2"), since what it printed went to the
+  console behind the desktop. One that ends with 0 (a command-line tool) says nothing.
 * **Screenshots.** Print Screen, or SurfOS > Screenshot for a keyboard without the key, captures the
   screen as it is, then the Save as chooser asks where to put it, offering `Screenshot YYYY-MM-DD
   HHMMSS.bmp` in the first volume mounted that can be written (a USB stick's), or `/`. It is saved

@@ -253,12 +253,48 @@ tests now (K1-K5 in `test_win`, P1-P4 in `test_guiclient` and `test_guidesk`, th
   pointer would be seen; `test_paste_given` checks that the clipboard is given before FOCUS; the screen check also
   cancels a chooser with the mouse, and closes wintest through its own question twice.
 
+## The second review
+
+The same reviewer read the fix round (2c5afd30..1447a4c2): it holds; the gates passed on 1447a4c2 (the coordinator
+ran the clean test-all again: 558 smoke checks and 51 of Files at O0 and at O2). One medium and four lows, a low
+from the image track's review, and a cleanup:
+
+- **N1, a CLOSE lost to a full queue read as "the program read it".** A stuck program typed at fills its 64 events;
+  the close button's CLOSE was refused, `close_waiting` said 0, and only three presses in 3 s offered "End the
+  program?". Chosen: the window remembers a CLOSE its full queue refused until the program reads again
+  (`close_lost` in kernel/win.c), and `win_update()` says a CLOSE waits meanwhile. Why: it changes nothing else of
+  the queue (every event's room stays as win.h gives it, and the place kept for a chooser's answer), and a program
+  that reads again gets the next press's CLOSE; a place kept for CLOSE would have taken one from every other event.
+  The reviewer's K6 is `test_close_lost` in test_win, and the probe file gives "close_waiting 1" now.
+- **N2, slow presses never reached "End the program?".** Now the third press asks, however slow: the first two send
+  CLOSE while the program reads them, and the third, two read and the window still there, asks (the 3 s window is
+  gone). Cancel there counts the presses from none again, so a program's own question ("Save the changes?") comes
+  back at the next press instead of the desktop's for good. A CLOSE waiting unread asks at once, as before.
+  (CLAUDE.md's "a second press ... asks" is the coordinator's to update at the integration.)
+- **N3, the name "the program cannot set" could be set** by copying a program under another file name. A program's
+  chooser now names its pid after the name, "Paint (pid 41): Save as", as "End the program?" does: the pid tells a
+  copy from the registry's Paint, and costs nothing to keep true.
+- **N4, the Help items' check was exact.** `reads_as()` (kernel/win.c) and the desktop's copy `gd_reads_as()` read a
+  run of blanks (the no-break space too) as one and leave ASCII punctuation at the end out, so "About  SurfOS." and
+  "Keyboard and mouse..." are refused, and a title "Window:" too. Known limits, in win.h: punctuation before the
+  name, and code page 437's letters that look like ASCII ones; a line stands above the desktop's own items.
+- **The image track's low: a program that fails before its window said nothing.** Programs the desktop starts (run,
+  run_file) are `TF_TOLD`: kernel/task.c keeps the end of such a task, with whether it ever opened a window
+  (`TF_WINDOW`, set by kernel/win.c), for the task that started it (`task_ends_take()`, a few kept, the oldest making
+  room), and struct gui_sys's `ended` gives them to the desktop. One that ended killed, or with a status other than 0,
+  before any window is said in a message, one at a time while no other dialog is up: "wpaint (pid 41) ended: status
+  2", "It opened no window; its text went to the console." One that ends with 0 says nothing. The ends kept before a
+  desktop began are let go at its first pass. Chosen over keeping the programs as the desktop's children: detached,
+  init collects them as before, and nothing else of their life changes. The selftest checks the kept end.
+- **Cleanup.** `gui_client.closing` (set, never read) is gone, with the 3 s rule's `close_at` and `GUI_CLOSE_MS`.
+- Outside this round's files: `docs/ARCHITECTURE.md` still says the second press asks "End the program?".
+
 ## Tests
 
 - Stage 1 (1acdce47): `test_win` 1,435 checks, `make unittest`, `make test-all` (558 smoke checks at O0 and O2).
 - The amendment (b513bfe2): `test_win` 1,615 (the menus' text, titles that pass for the desktop's, submenus and a
   Help, a chooser's flags and types); `make unittest`; `make test-all` (558 at O0 and O2).
-- Stage 2, at the tip of this branch:
+- Stage 2 (2c5afd30):
   - host: `test_win` 1,931 checks (menus set, lent to the desktop, the copy before freed at its next update, taken
     away; pastes given, whole, refused small, held by a count, the window's own copy first and made the copy as the
     desktop takes it, another window's never; choosers asked only after input, numbered, answered by number,
@@ -281,6 +317,13 @@ tests now (K1-K5 in `test_win`, P1-P4 in `test_guiclient` and `test_guidesk`, th
   - the full `make test-usb`: 881 of 881 checks at O0 and at O2.
   - `make -C surfcpu test-os-qemu`: 137 of 137 (kernel/tty.c is one of the RISC-V port's shared files).
   - each commit of stage 2 builds on its own (the kernel at O0 and the host tests, from a clean tree of that commit).
+- The review of stage 2 (1447a4c2): `test_win` 2,243 (K1-K5, the press rule, Help items, `close_waiting`),
+  `test_guiclient` 556 (P1-P2, choosers named by program, the close button's two cases, the paste before FOCUS),
+  `test_guidesk` 151 (P3-P4, titles' checks), `test_keyscan` 14 (new), the rest unchanged; `make unittest`; the
+  selftest's TTY_RAW_KEYS owner check; screen: `gui_apps_desk.py` 47 checks, wdemo hang's under the new rule; the
+  full `make test-usb` 890 of 890 at O0 and at O2; `make test-all` 558 and 51 at O0 and O2 (the coordinator's clean
+  rerun: mine at 19:38 lost the owner's-stick boot's 90 s wait to a guest clock behind under load, and its rerun was
+  cut by the Mac's sleep); `make -C surfcpu test-os-qemu` 137 of 137; each commit builds on its own.
 
 Nothing of this has run on the laptop, and nothing will until the owner tries it. The keyboard's repeat in
 particular is seen only there (QEMU's sendkey presses and lets go, with no typematic): `wintest desk` in the
