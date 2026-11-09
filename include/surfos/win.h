@@ -94,11 +94,15 @@ SYS_winctl (int fd, int op, void *arg): -EBADF, or -EINVAL for a descriptor that
         each title's room around it, come to at most WIN_MENU_BAR, so that the bar fits a
         640 x 400 desktop; no title passes for the desktop's own: none draws ≋ (U+224B, or
         U+2248, which the console draws alike), and none is SurfOS, Apps, Window or Help in any
-        case with blanks around it (a WIN_MENU_HELP title may be Help); no flags but those below,
+        case with blanks around it (a WIN_MENU_HELP title may be Help; 11/09/26: a run of blanks
+        inside reads as one, and punctuation at the end is not counted); no flags but those below,
         CHILD only after a SUBMENU item or another child, SUBMENU and CHILD only on items, HELP
         only on one title; no item of the Help menu reads as one of the desktop's own Help items
         (Keyboard and mouse, About SurfOS: on the cells drawn, in any case, blanks around them
-        not counted): -EINVAL otherwise. count 0 takes the window's menus away (the
+        not counted; 11/09/26, the second review: a run of blanks inside read as one, ASCII
+        punctuation at the end not counted, so "About  SurfOS." is one too; punctuation before
+        and look-alike letters are not read so, and a line stands above the desktop's own
+        items): -EINVAL otherwise. count 0 takes the window's menus away (the
         desktop's File and Edit come back); a new WIN_MENU replaces the menus whole, so a program
         sends them again when an item's state changes (a menu that is open meanwhile stays open,
         its selection kept where it can be). The ids are the program's own: the desktop only
@@ -411,7 +415,8 @@ struct win_state {
     u32 alerts;
     u32 menu_serial;
     int dialog;
-    int close_waiting;                  /* 11/05/26 (the review of stage 2): a WIN_EV_CLOSE it was sent waits unread */
+    int close_waiting;                  /* 11/05/26 (the review of stage 2): a WIN_EV_CLOSE it was sent waits unread;
+                                           11/09/26: or its full queue refused one, and it has not read since */
 };
 /* its pixels, 0x00RRGGBB in rows of w, lent to the desktop until its next update or close; 11/05/26: and its menus as
    it set them last (menus entries, checked as surfos/win.h says; NULL and 0 for none), lent the same way */

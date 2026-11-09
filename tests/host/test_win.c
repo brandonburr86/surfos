@@ -1324,6 +1324,20 @@ static void test_menu_text(void) {
     CHECK(menu_call(fd, it, 4) == -EINVAL);
     it[3] = mi(4, 0, "Keyboard and Mouse", "F1");
     CHECK(menu_call(fd, it, 4) == -EINVAL);
+    /* 11/09/26 (the second review, N4): blanks inside read as one, and punctuation at the end is left out */
+    it[3] = mi(4, 0, "About  SurfOS.", "");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "About\xC2\xA0SurfOS!", "");        /* the no-break space is a blank */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "keyboard   AND mouse...", "");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "AboutSurfOS", "");                 /* no blank between: no name of the desktop's */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[3] = mi(4, 0, "About SurfOS 2", "");              /* a digit is no punctuation */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE, "Window:", "");        /* a title too */
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[2] = mi(3, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");
     it[3] = mi(4, 0, "About Zoomer", "");                /* its own: good */
     CHECK(menu_call(fd, it, 4) == 0);
     it[2] = mi(3, WIN_MENU_TITLE, "View", "");          /* in a menu of its own the name is no Help item's */
@@ -2003,6 +2017,32 @@ static void test_close_waiting(void) {
     end();
 }
 
+/* K6 (the second review, N1): a stuck program's full queue (typed at) refuses the CLOSE; win_update() says one waits
+   all the same, until the program reads again, and the next CLOSE has a place then */
+static void test_close_lost(void) {
+    struct win_state st;
+    struct win_view view;
+    struct win_event ev[4];
+    int fd, h, i, r;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    for(i = 0; i < WIN_EVENTS; i++) send_ev(h, WIN_EV_KEY, 0, 0, 'k');       /* a stuck program, typed at */
+    r = send_ev(h, WIN_EV_CLOSE, 0, 0, 0);
+    as(desktop);
+    CHECK(r == -EAGAIN && win_of_fd(prog, fd)->lost == 1);
+    CHECK(win_update(h, &st, &view) == 0 && st.close_waiting);
+    CHECK(win_update(h, &st, &view) == 0 && st.close_waiting);         /* until it reads */
+    readev(prog, fd, ev, sizeof(ev[0]));                /* it reads again: one key */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && !st.close_waiting);
+    CHECK(send_ev(h, WIN_EV_CLOSE, 0, 0, 0) >= 0);      /* the next press: queued, and waits unread */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && st.close_waiting && win_of_fd(prog, fd)->lost == 1);
+    win_close(h);
+    end();
+}
+
 /* 11/05/26 (the review): an answer always comes: its place in the queue is kept while the request waits, and a request
    with no place for it is refused until the events are read */
 static void test_dialog_queue(void) {
@@ -2108,6 +2148,7 @@ int main(void) {
     test_hangup_full(0);
     test_hangup_full(1);
     test_close_waiting();
+    test_close_lost();                                  /* 11/09/26 (the second review) */
     test_themes();
     printf("test_win: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

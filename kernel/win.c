@@ -159,6 +159,8 @@ struct win {
     struct win_event ev[WIN_EVENTS];    /* a ring */
     u_int ev_first, ev_count, lost;
     u32 buttons, buttons_before;        /* the last pointer event queued: its buttons, and those before it */
+    bool close_lost;                    /* 11/09/26 (the second review, N1): a CLOSE its full queue refused, until it
+                                           reads again: the desktop counts it as one waiting unread */
     wait_queue_t readers;
 };
 
@@ -267,6 +269,7 @@ static int queue_event(struct win *w, const struct win_event *e) {
     }
     if(w->ev_count >= WIN_EVENTS - (w->asking && e->type != WIN_EV_DIALOG ? 1 : 0)) {
         w->lost++;                                      /* 11/05/26: the last place is a request's answer's */
+        if(e->type == WIN_EV_CLOSE) w->close_lost = true;      /* 11/09/26 (N1): win_update() says one waits */
         return -EAGAIN;
     }
     w->ev[(w->ev_first + w->ev_count++) % WIN_EVENTS] = *e;
@@ -409,6 +412,7 @@ static int win_read(struct vnode *v, u32 off, void *buf, u32 len) {
             for(k = 0; k < n; k++) chunk[k] = w->ev[(w->ev_first + k) % WIN_EVENTS];
             w->ev_first = (w->ev_first + n) % WIN_EVENTS;
             w->ev_count -= n;
+            w->close_lost = false;                      /* 11/09/26: it reads again; the next press is sent */
             irq_restore(flags);
             memcpy(buf, chunk, n * sizeof(chunk[0]));
             return (int)(n * sizeof(chunk[0]));
@@ -831,15 +835,29 @@ static int menu_cells(const char *s, u8 *cell) {
     return d.have ? -1 : cells;
 }
 
-/* the cells drawn (n of them) read as one of names (lower case), in any case, with blank cells around them (0xFF:
-   the no-break space) */
+/* a cell as reads_as() compares it: a blank (the space, 0xFF the no-break space) as the space, a letter in lower case */
+static u8 fold(u8 c) {
+    return c == 0xFF ? ' ' : c >= 'A' && c <= 'Z' ? (u8)(c + 32) : c;
+}
+
+/* 11/09/26 (the second review, N4): what may follow a name and still read as it: a blank, or ASCII punctuation */
+static bool trailing(u8 c) {
+    c = fold(c);
+    return c == ' ' || (c > ' ' && c < 0x7F && !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9'));
+}
+
+/* the cells drawn (n of them) read as one of names (lower case, one space between words): in any case, with blanks
+   around them; 11/09/26 (the second review, N4): a run of blanks inside reads as one, and punctuation at the end
+   (About  SurfOS. reads as about surfos). Not read so (a known limit): punctuation before, and code page 437's
+   letters that look like ASCII ones */
 static bool reads_as(const u8 *cell, u32 n, const char *const *names, u32 count) {
-    u32 i, k;
-    while(n && (cell[0] == ' ' || cell[0] == 0xFF)) cell++, n--;
-    while(n && (cell[n - 1] == ' ' || cell[n - 1] == 0xFF)) n--;
+    u32 i, j, k;
+    while(n && fold(cell[0]) == ' ') cell++, n--;
+    while(n && trailing(cell[n - 1])) n--;
     for(i = 0; i < count; i++) {
-        for(k = 0; k < n && names[i][k] && (cell[k] | 0x20) == names[i][k]; k++) ;
-        if(k == n && !names[i][k]) return true;
+        for(k = 0, j = 0; k < n && names[i][j] && fold(cell[k]) == (u8)names[i][j]; j++)
+            if(fold(cell[k++]) == ' ') while(k < n && fold(cell[k]) == ' ') k++;
+        if(k == n && !names[i][j]) return true;
     }
     return false;
 }
@@ -1299,7 +1317,8 @@ int win_update(int h, struct win_state *st, struct win_view *view) {
         st->alerts = w->alerts;                         /* 10/26/26 */
         st->menu_serial = w->menu_serial;               /* 11/05/26 */
         st->dialog = w->ask != NULL;
-        st->close_waiting = 0;                          /* (the review of stage 2: the close button's rule) */
+        st->close_waiting = w->close_lost;              /* (the review of stage 2: the close button's rule; */
+                                                        /* 11/09/26, N1: or refused by its full queue) */
         for(k = 0; k < w->ev_count; k++)
             if(w->ev[(w->ev_first + k) % WIN_EVENTS].type == WIN_EV_CLOSE) st->close_waiting = 1;
         if(w->view != w->buf) {                         /* the desktop draws the new pixels from now on */
