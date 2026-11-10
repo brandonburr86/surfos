@@ -66,6 +66,17 @@ file with the tips.
   keeping their order and text round the ring's end). test_gk's `unwatched()` has the case (4 of its checks fail
   without the fix); natively test_gk passes, also under ASan and UBSan. No application was hit: Chat checks its
   own descriptor, and nothing reads `ev.x` yet.
+- **76a3c840, mkimage's root directory.** The first gate's test-usb stopped before the guiapps scenario booted:
+  `make_fat32()` gave the root cluster 2 alone, and the guiapps stick's 512-byte clusters hold 16 entries. Each
+  track's folder fitted alone; all of them (code, desk, img, media, paint, sheet, web and the sys track's fill file,
+  with their long names and the label) are 18. The root now has a contiguous chain from cluster 2 of as many
+  clusters as its entries take, counted as `entries_of()` makes them; a root that fits keeps one cluster, so every
+  other image is byte for byte as before. test_devloop's `test_a_root_of_several_clusters` reads a root of two
+  clusters back with mkusb's reader (and fsck.fat where it is), and one that fits keeps one.
+- **efa4c193, Paint's Open with check.** Files' File > Open with lists the registry's programs for a type by
+  their titles, and img's `wview.app` offers the Image Viewer for a .bmp too, so "Image Viewer" came before
+  "Paint" (Paint's branch had img's older commit, without the entry). The check expected Paint lit in the first
+  row; it now waits for Paint's row, lit or not, goes down to it, and sees it lit before Enter.
 - **Not changed: Settings' window test.** A trial merge of kit's first fix round (3e1551f3) failed its check of a
   held arrow on the theme's radio group (5 applies expected, 3 got: radio groups acted once a press). kit's last
   round (N1) made movement keys repeat again and only activation keys act once a press, so the test passes as
@@ -98,7 +109,29 @@ applications. `docs/ROADMAP.md`: M14. `docs/README.md`: GUI.md's line, the brief
 
 ## The gate
 
-(to come)
+Through `06-gates/gate.sh`, which takes the suite lock for the timing-sensitive steps, each run under a wall-clock
+limit; the results are in `06-gates/results/apps-final-1/`, `-2/` and `-3/`, a summary and each step's log.
+
+- **apps-final-1, 4c3b81ea, the whole suite** (16:16-18:01): unittest 123 suites, none failed; test-mkusb 15
+  tests; test-devloop 30; build-usb at O0 and O2; test-all 51 Files and 558 smoke checks at O0 and at O2;
+  test-tcp 31 checks at O0 and O2; test-web 66 checks at O0 (449 s) and O2 (435 s). test-usb failed at O0 and
+  O2: the guiapps stick could not be made, and qemu-usb.py stopped there (76a3c840).
+- **apps-final-2, 76a3c840: unittest, devloop, usb, test-usb** (18:04-19:51): unittest 123 suites; test-devloop
+  31 tests; build-usb at O0 and O2; test-usb 1199 of 1201 checks at O0 and at O2, the two failures Paint's Open
+  with and what came after it (efa4c193). guichat and wsettings passed in it at both levels.
+- **apps-final-3, efa4c193: the guiapps scenario at O0 and O2** (the gate's sticks step with
+  `GATE_SCENARIOS=guiapps`, 19:53-20:22): 584 of 584 checks at each level, Paint's 35 among them. GATE PASSED.
+- test-all, tcp and web were not run again after 4c3b81ea: what changed since is `tools/mkimage.py` (a root that
+  fits in one cluster, as every image those steps make, is as before), `tests/test_devloop.py` and
+  `tools/gui_apps_paint.py`.
+- `make -C surfcpu test-os-qemu`: 137 of 137 at O2 and at O0, at cdb83948; nothing under `kernel/`, `fs/`,
+  `mm/`, `shell/` or the kernel's other folders changed after it (kit's rounds and the fixes since are user space
+  and tools).
+- Before the gate: `make unittest` passed at 582153be (122 suites) and at 4c3b81ea (123), each with the kernel and
+  programs built at O0.
+
+In apps-final-2's screenshots the desktop's About SurfOS window was open when Paint's checks began, left by an
+earlier track's checks; nothing failed for it, and it was not looked into further.
 
 ## Known lows
 
