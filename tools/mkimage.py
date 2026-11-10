@@ -258,8 +258,16 @@ def make_fat32(out, files, size_mb=512, label='SURFDEV', cluster_bytes=4096, ser
             node = node.setdefault(d, {})
         node[parts[-1]] = data
 
-    fat = [0x0FFFFFF8, FAT_EOC, FAT_EOC]            # the media byte, a reserved entry, the root (cluster 2)
-    room = {2: cluster_bytes}                       # a chain's first cluster: the bytes the chain holds
+    # 11/09/26 (the desktop applications' integration): the root has a chain of its own from cluster 2, as many
+    # clusters as its entries take (one when they fit, as before): every track's folder on the guiapps stick took
+    # more than 512 bytes. Its entries are counted as entries_of() makes them, aliases and long names
+    taken, root_bytes = set(), 32 if label else 0
+    for name in sorted(root):
+        short, long_ = short_alias(name, taken)
+        root_bytes += 32 * (1 + (len(lfn_entries(name, short)) if long_ else 0))
+    nroot = max(1, -(-root_bytes // cluster_bytes))
+    fat = [0x0FFFFFF8, FAT_EOC] + list(range(3, 2 + nroot)) + [FAT_EOC]   # the media byte, a reserved entry, the root
+    room = {2: nroot * cluster_bytes}               # a chain's first cluster: the bytes the chain holds
     todo = []                                       # (first cluster, its bytes, or (node, parent) for a directory)
 
     def alloc(nbytes):

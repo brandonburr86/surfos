@@ -406,6 +406,27 @@ class DataStickImageTests(unittest.TestCase):
                                            'caf\u00e9.txt', 'empty', 'Photos', 'many']))
         self.fsck(out, info['offset'])
 
+    def test_a_root_of_several_clusters(self):
+        # 11/09/26 (the desktop applications' integration): a root whose entries take more than one cluster (every
+        # track's folder on the guiapps stick) has a chain of its own; one whose entries fit keeps one cluster
+        files = {f'folder number {i:02d}/f.txt': bytes([65 + i % 26]) * (i + 1) for i in range(40)}
+        files['zz-last.bin'] = b'last\n'
+        out = str(self.dir / 'root.img')
+        info = mkimage.make_fat32(out, files, size_mb=64, label='GUISTICK', cluster_bytes=512)
+        fat, f = self.read_back(out)
+        with f:
+            self.assertGreater(len(list(fat.chain(fat.root))), 1)
+            root = sorted(n for n, _, _, _, _ in fat.entries(fat.root))
+            self.assertEqual(root, sorted({p.split('/')[0] for p in files}))
+            for path, data in files.items():
+                self.assertEqual(fat.read(path), data, path)
+        self.fsck(out, info['offset'])
+        small = str(self.dir / 'small-root.img')
+        mkimage.make_fat32(small, {'a.txt': b'a', 'b/c.txt': b'c'}, size_mb=64, cluster_bytes=512)
+        fat, f = self.read_back(small)
+        with f:
+            self.assertEqual(len(list(fat.chain(fat.root))), 1)
+
     def test_too_small_for_fat32(self):
         with self.assertRaises(ValueError):
             mkimage.make_fat32(str(self.dir / 'small.img'), {'x': b'1'}, size_mb=16)
