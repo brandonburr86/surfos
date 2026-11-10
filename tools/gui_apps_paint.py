@@ -197,8 +197,17 @@ def checks(d):
         select(d, files_row(d, s, 'sea.bmp', 3))
         for chord in ('ctrl-g', 'right', 'down', 'right'):
             d.key(chord)
-        d.visible('paint: File > Open with offers Paint for a .bmp, first',
-                  lambda s: d.text(s, OPEN_WITH_X, MENU_H + 4 + 4, 'Paint', PAPER, TEAL), 'guiapps-paint-openwith.png')
+        # 11/09/26 (the integration): Open with lists the registry's programs for a .bmp by their titles, so the
+        # Image Viewer (img's wview.app, which reads one too) may come first: Down to Paint's row, then Enter
+        row = lambda s, fg, bg: next((i for i in range(8)
+                                      if d.text(s, OPEN_WITH_X, MENU_H + 4 + 4 + 24 * i, 'Paint', fg, bg)), None)
+        s = d.visible('paint: File > Open with offers Paint for a .bmp',
+                      lambda s: row(s, PAPER, TEAL) is not None or row(s, INK, PAPER) is not None)
+        if row(s, PAPER, TEAL) is None:
+            for _ in range(row(s, INK, PAPER)):
+                d.key('down')
+        d.visible('paint: Paint chosen in Open with', lambda s: row(s, PAPER, TEAL) is not None,
+                  'guiapps-paint-openwith.png')
         d.key('ret')
         state['paint'] = True
         d.visible('paint: Paint starts with the picture, titled sea.bmp - Paint', place(d, 'sea.bmp - Paint'), timeout=20)
